@@ -59,14 +59,18 @@ class QuotlinPlugin(Star):
         message_str = event.message_str.strip()
         count = 1  # 默认只获取 1 条
 
-        # 匹配 /q <数字> 格式
-        match = re.match(r'^/q\s+(\d+)$', message_str)
+        logger.debug(f"解析消息: message_str='{message_str}'")
+
+        # 匹配 /q <数字> 格式（可能在消息的任意位置）
+        match = re.search(r'/q\s+(\d+)', message_str)
         if match:
             count = int(match.group(1))
             if count < 1:
                 count = 1
             if count > 20:
                 count = 20  # 限制最多 20 条
+
+        logger.debug(f"解析结果: count={count}")
 
         # 获取被回复消息的内容
         msg_data = await self.onebot.get_msg(reply_id)
@@ -92,6 +96,8 @@ class QuotlinPlugin(Star):
 
         # 构建消息列表
         messages_data = [msg_data]
+
+        logger.debug(f"准备获取历史消息: count={count}, group_id={group_id}, message_seq={message_seq}")
 
         # 如果需要多条消息，尝试获取历史
         if count > 1 and group_id:
