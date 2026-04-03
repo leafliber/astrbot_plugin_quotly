@@ -117,11 +117,12 @@ class QuotlinPlugin(Star):
 
             if messages_history:
                 # 过滤并排序消息
-                # 1. 过滤掉被回复的消息本身（message_id == reply_id）
-                # 2. 按 message_id 排序（从小到大，即从旧到新）
+                # 使用 time 字段排序（从旧到新）
                 filtered_messages = []
                 for msg in messages_history:
                     msg_id = msg.get("message_id")
+                    msg_time = msg.get("time", 0)
+                    
                     # 确保 message_id 是整数
                     if isinstance(msg_id, str):
                         try:
@@ -129,15 +130,15 @@ class QuotlinPlugin(Star):
                         except (ValueError, TypeError):
                             continue
                     
-                    logger.debug(f"消息 ID: {msg_id}, reply_id: {reply_id}, 比较: {msg_id} < {reply_id} = {msg_id < reply_id}")
+                    logger.debug(f"消息 ID: {msg_id}, time: {msg_time}, reply_id: {reply_id}")
                     
-                    # 只保留 message_id < reply_id 的消息（被回复消息之前的消息）
-                    if msg_id is not None and msg_id < reply_id:
-                        filtered_messages.append((msg_id, msg))
+                    # 只保留 message_id != reply_id 的消息（排除被回复的消息本身）
+                    if msg_id is not None and msg_id != reply_id:
+                        filtered_messages.append((msg_time, msg_id, msg))
                 
                 logger.debug(f"过滤后的消息数量: {len(filtered_messages)}")
                 
-                # 按 message_id 排序（从旧到新）
+                # 按 time 排序（从旧到新）
                 filtered_messages.sort(key=lambda x: x[0])
                 
                 # 取最后 (count-1) 条消息（最接近被回复消息的）
@@ -147,9 +148,9 @@ class QuotlinPlugin(Star):
                 
                 logger.debug(f"最终选取的历史消息数量: {len(filtered_messages)}")
                 
-                # 添加到消息列表
-                for _, msg in filtered_messages:
-                    messages_data.insert(0, msg)
+                # 添加到消息列表（按时间从旧到新）
+                for _, _, msg in filtered_messages:
+                    messages_data.insert(len(messages_data) - 1, msg)
                     
         logger.debug(f"总消息数量: {len(messages_data)}")
 
