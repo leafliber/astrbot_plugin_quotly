@@ -6,4 +6,5 @@ description: 将消息渲染为精美的引用图片，复刻自 quote-bot
 support_platforms:
   - onebot:group
   - onebot:private
+repo: https://github.com/leafliber/astrbot_plugin_quotly
 required_astrbot_version: ">=4.0.0"
