@@ -69,9 +69,10 @@ class QuotlyRenderer:
         page = await browser.new_page(viewport={"width": 800, "height": 100})
         try:
             await page.set_content(html_content)
-            # 等待字体和图片加载
-            await page.wait_for_load_state("networkidle", timeout=5000)
-            await page.wait_for_timeout(500)
+            # 等待 DOM 加载完成
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            # 等待字体和图片加载，以及 JavaScript 执行
+            await page.wait_for_timeout(1000)
             
             # 使用 full_page=True 自动适应任意高度
             screenshot = await page.screenshot(
