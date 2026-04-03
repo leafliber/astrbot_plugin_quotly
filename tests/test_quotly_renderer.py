@@ -1,8 +1,9 @@
 """
-SVG 渲染器单元测试
+渲染器单元测试
 """
 
 import sys
+import asyncio
 from pathlib import Path
 
 # 添加项目根目录到 Python 路径
@@ -18,6 +19,13 @@ class TestQuotlyRenderer:
         """每个测试方法执行前的setup"""
         font_dir = Path(__file__).parent.parent / "assets" / "fonts"
         self.renderer = QuotlyRenderer(str(font_dir))
+
+    def teardown_method(self):
+        """每个测试方法执行后的清理"""
+        try:
+            asyncio.run(self.renderer.close())
+        except Exception:
+            pass
 
     def test_render_single_message(self):
         """测试渲染单条消息"""
@@ -84,13 +92,13 @@ class TestQuotlyRenderer:
         assert result[:8] == b'\x89PNG\r\n\x1a\n'
 
     def test_render_with_long_content(self):
-        """测试渲染长内容消息（自动换行）"""
+        """测试渲染长内容消息"""
         messages = [
             {
                 "nickname": "测试用户",
                 "card": "",
                 "user_id": 123456,
-                "content": "这是一条非常长的消息，" * 15,
+                "content": "这是一条非常长的消息，" * 20,
                 "time_str": "12:30",
                 "avatar_url": None
             }
@@ -101,39 +109,49 @@ class TestQuotlyRenderer:
         assert isinstance(result, bytes)
         assert result[:8] == b'\x89PNG\r\n\x1a\n'
 
-    def test_wrap_text(self):
-        """测试文本换行"""
-        text = "a" * 100
-        lines = self.renderer._wrap_text(text, 200)
-        assert len(lines) > 1
+    def test_escape_html(self):
+        """测试 HTML 特殊字符转义"""
+        test_cases = [
+            ("<test>", "&lt;test&gt;"),
+            ("a & b", "a &amp; b"),
+            ('quote "test"', "quote &quot;test&quot;"),
+        ]
 
-    def test_wrap_text_with_chinese(self):
-        """测试中文文本换行"""
-        text = "中" * 50
-        lines = self.renderer._wrap_text(text, 200)
-        assert len(lines) > 1
+        for input_text, expected in test_cases:
+            result = self.renderer._escape_html(input_text)
+            assert result == expected, f"Input: {input_text}, Expected: {expected}, Got: {result}"
 
-    def test_wrap_text_with_short_text(self):
-        """测试短文本不换行"""
-        text = "你好"
-        lines = self.renderer._wrap_text(text, 200)
-        assert len(lines) == 1
-        assert lines[0] == "你好"
+    def test_escape_html_with_empty_string(self):
+        """测试空字符串转义"""
+        result = self.renderer._escape_html("")
+        assert result == ""
 
-    def test_calculate_height(self):
-        """测试高度计算"""
+    def test_escape_html_with_normal_text(self):
+        """测试普通文本（无特殊字符）转义"""
+        result = self.renderer._escape_html("你好，世界！")
+        assert result == "你好，世界！"
+
+    def test_build_html_structure(self):
+        """测试 HTML 结构构建"""
         messages = [
             {
-                "nickname": "用户A",
-                "content": "短消息",
-            },
-            {
-                "nickname": "用户B",
-                "content": "这是一条比较长的消息内容",
+                "nickname": "测试用户",
+                "card": "",
+                "user_id": 123456,
+                "content": "消息内容",
+                "time_str": "12:30",
+                "avatar_url": None
             }
         ]
-        height = self.renderer._calculate_height(messages)
-        assert height > 200
+
+        html = self.renderer._build_html(messages)
+
+        assert "<!DOCTYPE html>" in html
+        assert 'class="chat-container"' in html
+        assert 'class="message left"' in html
+        assert 'class="bubble-left"' in html
+        assert '<span class="nickname">测试用户</span>' in html
+        assert '<div class="message-content">消息内容</div>' in html
 
 
 if __name__ == "__main__":

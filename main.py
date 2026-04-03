@@ -72,8 +72,8 @@ class QuotlinPlugin(Star):
         }
 
         try:
-            # 渲染图片
-            png_data = self.renderer.render([message_data])
+            # 渲染图片（异步）
+            png_data = await self.renderer.arender([message_data])
 
             # 保存到临时文件
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -97,9 +97,9 @@ class QuotlinPlugin(Star):
         """
         /q - /quote 的简短别名
         """
-        # 直接调用 quote_command 的逻辑
         await self.quote_command(event)
 
     async def terminate(self):
         """插件卸载时调用"""
+        await self.renderer.close()
         logger.info("Quotlin 插件已卸载")
