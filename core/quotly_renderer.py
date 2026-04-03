@@ -31,29 +31,6 @@ class QuotlyRenderer:
             font_data = f.read()
         self.font_base64 = base64.b64encode(font_data).decode('ascii')
 
-        # Playwright 相关
-        self._playwright = None
-        self._browser = None
-
-    async def _get_browser(self):
-        """获取或初始化浏览器实例"""
-        if self._browser is None:
-            from playwright.async_api import async_playwright
-            self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-            )
-        return self._browser
-
-    async def _close_browser(self):
-        """关闭浏览器"""
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
-
     async def arender(self, messages: List[dict]) -> bytes:
         """
         异步渲染消息列表为 PNG 图片
@@ -72,18 +49,42 @@ class QuotlyRenderer:
             PNG 格式的字节数据
         """
         html_content = self._build_html(messages)
-        browser = await self._get_browser()
+        
+        # 每次渲染都创建新的浏览器实例，确保 device_scale_factor 生效
+        from playwright.async_api import async_playwright
+        playwright = await async_playwright().start()
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-font-subpixel-positioning',
+                '--disable-lcd-text',
+                '--disable-gpu',
+                '--disable-gpu-compositing',
+                '--disable-software-rasterizer',
+                '--font-render-hinting=none',
+            ]
+        )
 
-        page = await browser.new_page(viewport={"width": 400, "height": 100, "device_scale_factor": 2})
+        # 使用足够大的 viewport 宽度，高度自适应
+        page = await browser.new_page(viewport={"width": 800, "height": 100})
         try:
             await page.set_content(html_content)
             # 等待字体和图片加载
             await page.wait_for_load_state("networkidle", timeout=5000)
             await page.wait_for_timeout(500)
-            screenshot = await page.screenshot(full_page=True)
+            
+            # 使用 full_page=True 自动适应任意高度
+            screenshot = await page.screenshot(
+                full_page=True,
+                type="png",
+                animations="disabled",
+                caret="initial"
+            )
             return screenshot
         finally:
             await page.close()
+            await browser.close()
+            await playwright.stop()
 
     def render(self, messages: List[dict]) -> bytes:
         """
@@ -170,26 +171,25 @@ class QuotlyRenderer:
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'Source Han Sans CN', sans-serif;
             background: #e8e8ed;
             padding: 0;
-            display: flex;
+            display: inline-flex;
             justify-content: center;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
         }}
 
         .chat-container {{
-            width: 380px;
+            width: fit-content;
+            max-width: 800px;
+            min-width: 200px;
             background: #e8e8ed;
-            padding: 10px;
+            padding: 30px;
         }}
 
 
         .message {{
             display: flex;
-            margin: 12px 0;
-            align-items: flex-start;
-        }}
-
-        .message {{
-            display: flex;
-            margin: 12px 0;
+            margin: 32px 0;
             align-items: flex-start;
         }}
 
@@ -198,8 +198,8 @@ class QuotlyRenderer:
         }}
 
         .avatar, .avatar-placeholder {{
-            width: 40px;
-            height: 40px;
+            width: 100px;
+            height: 100px;
             border-radius: 50%;
             object-fit: cover;
         }}
@@ -210,46 +210,47 @@ class QuotlyRenderer:
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 15px;
+            font-size: 36px;
             font-weight: 500;
         }}
 
         .content-wrapper {{
-            margin-left: 10px;
-            max-width: 100%;
+            margin-left: 24px;
+            flex: 0 1 auto;
+            min-width: 0;
         }}
 
         .message-header {{
-            margin-bottom: 4px;
-            font-size: 12px;
+            margin-bottom: 10px;
+            font-size: 28px;
             display: flex;
             align-items: center;
             flex-wrap: wrap;
-            gap: 4px;
+            gap: 10px;
         }}
 
         .title-owner {{
             color: #b8860b;
             background: #fff9e6;
-            padding: 1px 6px;
-            border-radius: 3px;
-            font-size: 11px;
+            padding: 4px 16px;
+            border-radius: 8px;
+            font-size: 26px;
         }}
 
         .title-admin {{
             color: #1a9f06;
             background: #e6f7e6;
-            padding: 1px 6px;
-            border-radius: 3px;
-            font-size: 11px;
+            padding: 4px 16px;
+            border-radius: 8px;
+            font-size: 26px;
         }}
 
         .title-special {{
             color: #7b1fa2;
             background: #f3e5f5;
-            padding: 1px 6px;
-            border-radius: 3px;
-            font-size: 11px;
+            padding: 4px 16px;
+            border-radius: 8px;
+            font-size: 26px;
         }}
 
         .nickname {{
@@ -259,24 +260,28 @@ class QuotlyRenderer:
 
         .time {{
             color: #999;
-            font-size: 11px;
+            font-size: 26px;
         }}
 
         /* 气泡样式 - 白色气泡，无箭头 */
         .bubble {{
             background: #ffffff;
-            border-radius: 10px;
-            padding: 8px 12px;
-            box-shadow: 0 1px 1px rgba(0,0,0,0.08);
-            word-wrap: break-word;
+            border-radius: 24px;
+            padding: 16px 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            overflow-wrap: break-word;
+            display: inline-block;
+            width: fit-content;
+            max-width: 100%;
         }}
 
         .message-content {{
-            font-size: 14px;
-            line-height: 1.5;
+            font-size: 32px;
+            line-height: 1.6;
             color: #1a1a1a;
             white-space: pre-wrap;
             word-break: break-word;
+            display: inline;
         }}
 
         .msg-image {{
@@ -290,6 +295,39 @@ class QuotlyRenderer:
     <div class="chat-container">
         {messages_html}
     </div>
+    <script>
+    function adjustBubbleWidth() {{
+        const bubbles = document.querySelectorAll('.bubble');
+        bubbles.forEach(bubble => {{
+            const content = bubble.querySelector('.message-content');
+            if (!content) return;
+            
+            const range = document.createRange();
+            range.selectNodeContents(content);
+            
+            const rects = range.getClientRects();
+            if (rects.length === 0) return;
+            
+            let maxWidth = 0;
+            for (let i = 0; i < rects.length; i++) {{
+                const width = rects[i].width;
+                if (width > maxWidth) {{
+                    maxWidth = width;
+                }}
+            }}
+            
+            const padding = 40;
+            const finalWidth = maxWidth + padding;
+            bubble.style.width = finalWidth + 'px';
+        }});
+    }}
+    
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', adjustBubbleWidth);
+    }} else {{
+        adjustBubbleWidth();
+    }}
+    </script>
 </body>
 </html>
         """
@@ -334,7 +372,3 @@ class QuotlyRenderer:
         result = result.replace('\n', '<br>')
 
         return result
-
-    async def close(self):
-        """关闭渲染器，释放资源"""
-        await self._close_browser()

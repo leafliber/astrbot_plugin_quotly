@@ -6,5 +6,4 @@ author: leafiber
 repo: https://github.com/leafliber/astrbot_plugin_quotly
 required_astrbot_version: ">=4.0.0"
 support_platforms:
-  - onebot:group
-  - onebot:private
+  - aiocqhttp

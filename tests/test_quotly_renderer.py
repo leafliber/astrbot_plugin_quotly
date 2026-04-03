@@ -22,10 +22,7 @@ class TestQuotlyRenderer:
 
     def teardown_method(self):
         """每个测试方法执行后的清理"""
-        try:
-            asyncio.run(self.renderer.close())
-        except Exception:
-            pass
+        pass
 
     def test_render_single_message(self):
         """测试渲染单条消息"""

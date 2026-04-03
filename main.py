@@ -181,5 +181,4 @@ class QuotlinPlugin(Star):
 
     async def terminate(self):
         """插件卸载时调用"""
-        await self.renderer.close()
         logger.info("Quotlin 插件已卸载")
