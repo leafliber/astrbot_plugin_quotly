@@ -72,7 +72,7 @@ class MessageParser:
 
         return None
 
-    def parse_sender_info(self, sender: dict) -> tuple[int, str, str, str]:
+    def parse_sender_info(self, sender: dict) -> tuple[int, str, str, str, str]:
         """
         解析发送者信息
 
@@ -80,13 +80,19 @@ class MessageParser:
             sender: OneBot11 sender 字典
 
         Returns:
-            (user_id, nickname, card, title)
+            (user_id, nickname, card, title, role)
+            - user_id: QQ号
+            - nickname: 昵称
+            - card: 群名片
+            - title: 专属头衔
+            - role: 角色 (owner/admin/member)
         """
         user_id = sender.get("user_id", 0)
         nickname = sender.get("nickname", "")
         card = sender.get("card", "")
         title = sender.get("title", "")
-        return user_id, nickname, card, title
+        role = sender.get("role", "member")
+        return user_id, nickname, card, title, role
 
     def parse_message_content(self, message: list) -> str:
         """

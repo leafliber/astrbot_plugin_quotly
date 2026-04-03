@@ -133,6 +133,7 @@ class QuotlyRenderer:
             nickname = self._escape_html(msg.get('nickname', '未知用户'))
             card = msg.get('card', '')
             title = msg.get('title', '')  # 群头衔
+            role = msg.get('role', 'member')  # 角色 (owner/admin/member)
             content = self._escape_html(msg.get('content', ''))
             time_str = self._escape_html(msg.get('time_str', ''))
             avatar_url = msg.get('avatar_url', '')
@@ -145,15 +146,19 @@ class QuotlyRenderer:
 
             # 头部信息：群头衔 > 姓名 > 时间
             header_html = ""
-            if title:
-                # 根据头衔类型设置不同的样式类
-                if "群主" in title:
-                    title_class = "title-owner"
-                elif "管理员" in title:
-                    title_class = "title-admin"
-                else:
-                    title_class = "title-special"
-                header_html += f'<span class="{title_class}">{title}</span>'
+            
+            # 根据 role 和 title 决定头衔显示
+            if role == "owner":
+                # 群主：显示"群主"，金色背景
+                header_html += '<span class="title-owner">群主</span>'
+            elif role == "admin":
+                # 管理员：显示专属头衔或"管理"，绿色背景
+                display_title = title if title else "管理"
+                header_html += f'<span class="title-admin">{display_title}</span>'
+            elif title:
+                # 普通成员有专属头衔：显示专属头衔，紫色背景
+                header_html += f'<span class="title-special">{title}</span>'
+            
             header_html += f'<span class="nickname">{card if card else nickname}</span>'
             if time_str:
                 header_html += f'<span class="time">{time_str}</span>'
@@ -210,7 +215,7 @@ class QuotlyRenderer:
 
         .chat-container {{
             width: fit-content;
-            max-width: 800px;
+            max-width: 1200px;
             min-width: 200px;
             background: #e8e8ed;
             padding: 30px;
@@ -302,7 +307,6 @@ class QuotlyRenderer:
             overflow-wrap: break-word;
             display: inline-block;
             width: fit-content;
-            max-width: 100%;
         }}
 
         .message-content {{
@@ -332,22 +336,13 @@ class QuotlyRenderer:
             const content = bubble.querySelector('.message-content');
             if (!content) return;
             
-            const range = document.createRange();
-            range.selectNodeContents(content);
+            // 获取气泡实际需要的宽度
+            const actualWidth = bubble.scrollWidth;
+            const minWidth = 100; // 最小宽度
+            const maxWidth = 1100; // 最大宽度（留出 padding）
             
-            const rects = range.getClientRects();
-            if (rects.length === 0) return;
-            
-            let maxWidth = 0;
-            for (let i = 0; i < rects.length; i++) {{
-                const width = rects[i].width;
-                if (width > maxWidth) {{
-                    maxWidth = width;
-                }}
-            }}
-            
-            const padding = 40;
-            const finalWidth = maxWidth + padding;
+            // 设置合适的宽度（限制在最小和最大宽度之间）
+            const finalWidth = Math.min(Math.max(actualWidth, minWidth), maxWidth);
             bubble.style.width = finalWidth + 'px';
         }});
     }}

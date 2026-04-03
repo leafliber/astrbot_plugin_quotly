@@ -148,9 +148,13 @@ class QuotlinPlugin(Star):
                 
                 logger.debug(f"最终选取的历史消息数量: {len(filtered_messages)}")
                 
-                # 添加到消息列表（按时间从旧到新）
+                # 清空消息列表，按时间顺序重新添加
+                messages_data = []
+                # 先添加被回复的消息（消息1）
+                messages_data.append(msg_data)
+                # 然后添加历史消息（消息2 3 4 5）
                 for _, _, msg in filtered_messages:
-                    messages_data.insert(len(messages_data) - 1, msg)
+                    messages_data.append(msg)
                     
         logger.debug(f"总消息数量: {len(messages_data)}")
 
@@ -159,7 +163,7 @@ class QuotlinPlugin(Star):
             render_messages = []
             for msg_data_item in messages_data:
                 sender = msg_data_item.get("sender", {})
-                user_id, nickname, card, title = self.parser.parse_sender_info(sender)
+                user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
                 content = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
 
@@ -175,6 +179,7 @@ class QuotlinPlugin(Star):
                     "nickname": nickname,
                     "card": card,
                     "title": title,
+                    "role": role,
                     "user_id": user_id,
                     "content": content,
                     "time_str": time_str,
