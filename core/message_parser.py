@@ -43,7 +43,12 @@ class MessageParser:
         if not hasattr(event, 'message_obj') or not event.message_obj:
             return None
 
-        for segment in event.message_obj:
+        # message_obj.message 是消息段列表
+        message_segments = event.message_obj.message
+        if not message_segments:
+            return None
+
+        for segment in message_segments:
             # 检查是否是 reply 类型的消息段
             if hasattr(segment, 'type') and segment.type == "reply":
                 data = getattr(segment, 'data', {})
