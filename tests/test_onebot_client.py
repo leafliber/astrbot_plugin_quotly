@@ -100,6 +100,51 @@ class TestOneBotClient:
 
         assert result is None
 
+    def test_get_history_success(self):
+        """测试获取消息历史成功"""
+        expected_history = [
+            {"message_id": 123, "message": "消息1"},
+            {"message_id": 124, "message": "消息2"},
+        ]
+        self.mock_context.api_result = expected_history
+
+        result = asyncio.run(self.client.get_history(123456, 100, 10))
+
+        assert self.mock_context.called_api == "get_history"
+        assert self.mock_context.api_params == {"group_id": 123456, "start_message_id": 100, "count": 10}
+        assert result == expected_history
+
+    def test_get_history_failure(self):
+        """测试获取消息历史失败"""
+        self.mock_context.api_result = None
+
+        result = asyncio.run(self.client.get_history(123456, 100, 10))
+
+        assert result is None
+
+    def test_get_group_member_info_success(self):
+        """测试获取群成员信息成功"""
+        expected_info = {
+            "user_id": 123456,
+            "nickname": "群友",
+            "title": "群主"
+        }
+        self.mock_context.api_result = expected_info
+
+        result = asyncio.run(self.client.get_group_member_info(123456, 789))
+
+        assert self.mock_context.called_api == "get_group_member_info"
+        assert self.mock_context.api_params == {"group_id": 123456, "user_id": 789}
+        assert result == expected_info
+
+    def test_get_group_member_info_failure(self):
+        """测试获取群成员信息失败"""
+        self.mock_context.api_result = None
+
+        result = asyncio.run(self.client.get_group_member_info(123456, 99999))
+
+        assert result is None
+
 
 if __name__ == "__main__":
     import pytest
