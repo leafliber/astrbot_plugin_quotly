@@ -61,8 +61,8 @@ class QuotlinPlugin(Star):
 
         logger.debug(f"解析消息: message_str='{message_str}'")
 
-        # 匹配 /q <数字> 格式（可能在消息的任意位置）
-        match = re.search(r'/q\s+(\d+)', message_str)
+        # 匹配 q <数字> 格式（AstrBot 已去掉 / 前缀）
+        match = re.match(r'^q\s+(\d+)', message_str)
         if match:
             count = int(match.group(1))
             if count < 1:
