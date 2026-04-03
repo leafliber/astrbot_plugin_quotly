@@ -72,13 +72,13 @@ class OneBotClient:
         """
         return f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec={size}"
 
-    async def get_history(self, group_id: int, start_message_id: int = 0, count: int = 20) -> Optional[list]:
+    async def get_history(self, group_id: int, message_id: int = 0, count: int = 20) -> Optional[list]:
         """
         获取消息历史
 
         Args:
             group_id: 群号
-            start_message_id: 起始消息 ID
+            message_id: 起始消息 ID（OneBot v11 标准参数名）
             count: 获取数量
 
         Returns:
@@ -88,7 +88,7 @@ class OneBotClient:
             return None
 
         try:
-            result = await self.bot.call_action('get_group_msg_history', group_id=group_id, start_message_id=start_message_id, count=count)
+            result = await self.bot.call_action('get_group_msg_history', group_id=group_id, message_id=message_id, count=count)
             return result
         except Exception:
             return None

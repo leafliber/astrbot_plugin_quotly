@@ -101,12 +101,34 @@ class QuotlinPlugin(Star):
                 messages_history = []
 
             if messages_history:
-                # 过滤出 reply_id 之前的消息
+                # 过滤并排序消息
+                # 1. 过滤掉 message_id >= reply_id 的消息（包括被回复的消息本身）
+                # 2. 按 message_id 排序（从小到大，即从旧到新）
+                filtered_messages = []
                 for msg in messages_history:
-                    if msg.get("message_id") < reply_id:
-                        messages_data.insert(0, msg)
-                        if len(messages_data) >= count:
-                            break
+                    msg_id = msg.get("message_id")
+                    # 确保 message_id 是整数
+                    if isinstance(msg_id, str):
+                        try:
+                            msg_id = int(msg_id)
+                        except (ValueError, TypeError):
+                            continue
+                    
+                    # 只保留 message_id < reply_id 的消息
+                    if msg_id is not None and msg_id < reply_id:
+                        filtered_messages.append((msg_id, msg))
+                
+                # 按 message_id 排序（从旧到新）
+                filtered_messages.sort(key=lambda x: x[0])
+                
+                # 取最后 (count-1) 条消息（最接近被回复消息的）
+                need_count = count - 1
+                if len(filtered_messages) > need_count:
+                    filtered_messages = filtered_messages[-need_count:]
+                
+                # 添加到消息列表
+                for _, msg in filtered_messages:
+                    messages_data.insert(0, msg)
 
         # 渲染消息列表
         try:
