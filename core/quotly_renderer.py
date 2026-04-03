@@ -7,10 +7,15 @@ import asyncio
 import base64
 from pathlib import Path
 from typing import List, Optional
+from astrbot.api import logger
 
 
 class QuotlyRenderer:
     """引用消息渲染器"""
+    
+    _playwright = None
+    _browser = None
+    _lock = asyncio.Lock()
 
     def __init__(self, font_dir: Optional[str] = None):
         """
@@ -24,12 +29,47 @@ class QuotlyRenderer:
             font_dir = plugin_dir / "assets" / "fonts"
 
         self.font_dir = Path(font_dir)
-        font_path = self.font_dir / "SourceHanSansCN-Regular.otf"
+        
+        # 优先使用鸿蒙字体，如果不存在则使用思源黑体
+        font_path = self.font_dir / "HarmonyOS_Sans_SC_Regular.ttf"
+        if not font_path.exists():
+            font_path = self.font_dir / "SourceHanSansCN-Regular.otf"
 
         # 读取字体文件并转为 base64
         with open(font_path, 'rb') as f:
             font_data = f.read()
         self.font_base64 = base64.b64encode(font_data).decode('ascii')
+
+    async def _ensure_browser(self):
+        """确保浏览器实例已启动"""
+        async with self._lock:
+            if self._browser is None:
+                logger.debug("启动浏览器实例...")
+                from playwright.async_api import async_playwright
+                self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-font-subpixel-positioning',
+                        '--disable-lcd-text',
+                        '--disable-gpu',
+                        '--disable-gpu-compositing',
+                        '--disable-software-rasterizer',
+                        '--font-render-hinting=none',
+                    ]
+                )
+                logger.debug("浏览器实例已启动")
+
+    async def cleanup(self):
+        """清理浏览器实例"""
+        async with self._lock:
+            if self._browser is not None:
+                logger.debug("关闭浏览器实例...")
+                await self._browser.close()
+                await self._playwright.stop()
+                self._browser = None
+                self._playwright = None
+                logger.debug("浏览器实例已关闭")
 
     async def arender(self, messages: List[dict]) -> bytes:
         """
@@ -48,25 +88,11 @@ class QuotlyRenderer:
         Returns:
             PNG 格式的字节数据
         """
+        await self._ensure_browser()
         html_content = self._build_html(messages)
         
-        # 每次渲染都创建新的浏览器实例，确保 device_scale_factor 生效
-        from playwright.async_api import async_playwright
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-font-subpixel-positioning',
-                '--disable-lcd-text',
-                '--disable-gpu',
-                '--disable-gpu-compositing',
-                '--disable-software-rasterizer',
-                '--font-render-hinting=none',
-            ]
-        )
-
-        # 使用足够大的 viewport 宽度，高度自适应
-        page = await browser.new_page(viewport={"width": 800, "height": 100})
+        # 使用全局浏览器实例创建新页面
+        page = await self._browser.new_page(viewport={"width": 800, "height": 100})
         try:
             await page.set_content(html_content)
             # 等待 DOM 加载完成
@@ -84,8 +110,6 @@ class QuotlyRenderer:
             return screenshot
         finally:
             await page.close()
-            await browser.close()
-            await playwright.stop()
 
     def render(self, messages: List[dict]) -> bytes:
         """
@@ -235,7 +259,7 @@ class QuotlyRenderer:
             background: #fff9e6;
             padding: 4px 16px;
             border-radius: 8px;
-            font-size: 26px;
+            font-size: 24px;
         }}
 
         .title-admin {{
@@ -243,7 +267,7 @@ class QuotlyRenderer:
             background: #e6f7e6;
             padding: 4px 16px;
             border-radius: 8px;
-            font-size: 26px;
+            font-size: 24px;
         }}
 
         .title-special {{
@@ -251,7 +275,7 @@ class QuotlyRenderer:
             background: #f3e5f5;
             padding: 4px 16px;
             border-radius: 8px;
-            font-size: 26px;
+            font-size: 24px;
         }}
 
         .nickname {{

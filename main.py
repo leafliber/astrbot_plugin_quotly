@@ -87,18 +87,26 @@ class QuotlinPlugin(Star):
                 except (ValueError, TypeError):
                     group_id = None
 
+        # 获取消息序号（用于获取历史消息）
+        message_seq = msg_data.get("message_seq", 0)
+
         # 构建消息列表
         messages_data = [msg_data]
 
         # 如果需要多条消息，尝试获取历史
         if count > 1 and group_id:
-            history = await self.onebot.get_history(group_id, reply_id, count)
+            logger.debug(f"尝试获取历史消息: group_id={group_id}, message_seq={message_seq}, count={count}")
+            history = await self.onebot.get_history(group_id, message_seq, count)
+            logger.debug(f"历史消息返回类型: {type(history)}, 内容: {history if not history or len(str(history)) < 500 else str(history)[:500] + '...'}")
+            
             if history and isinstance(history, dict):
                 messages_history = history.get("messages", [])
             elif history and isinstance(history, list):
                 messages_history = history
             else:
                 messages_history = []
+
+            logger.debug(f"解析后的历史消息数量: {len(messages_history)}")
 
             if messages_history:
                 # 过滤并排序消息
@@ -118,6 +126,8 @@ class QuotlinPlugin(Star):
                     if msg_id is not None and msg_id < reply_id:
                         filtered_messages.append((msg_id, msg))
                 
+                logger.debug(f"过滤后的消息数量: {len(filtered_messages)}")
+                
                 # 按 message_id 排序（从旧到新）
                 filtered_messages.sort(key=lambda x: x[0])
                 
@@ -126,9 +136,13 @@ class QuotlinPlugin(Star):
                 if len(filtered_messages) > need_count:
                     filtered_messages = filtered_messages[-need_count:]
                 
+                logger.debug(f"最终选取的历史消息数量: {len(filtered_messages)}")
+                
                 # 添加到消息列表
                 for _, msg in filtered_messages:
                     messages_data.insert(0, msg)
+                    
+        logger.debug(f"总消息数量: {len(messages_data)}")
 
         # 渲染消息列表
         try:
@@ -179,4 +193,5 @@ class QuotlinPlugin(Star):
 
     async def terminate(self):
         """插件卸载时调用"""
+        await self.renderer.cleanup()
         logger.info("Quotlin 插件已卸载")

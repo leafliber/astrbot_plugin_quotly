@@ -4,6 +4,7 @@ OneBot11 API 客户端
 """
 
 from typing import Optional, Any
+from astrbot.api import logger
 
 
 class OneBotClient:
@@ -72,25 +73,26 @@ class OneBotClient:
         """
         return f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec={size}"
 
-    async def get_history(self, group_id: int, message_id: int = 0, count: int = 20) -> Optional[list]:
+    async def get_history(self, group_id: int, message_seq: int = 0, count: int = 20) -> Optional[dict]:
         """
         获取消息历史
 
         Args:
             group_id: 群号
-            message_id: 起始消息 ID（OneBot v11 标准参数名）
+            message_seq: 起始消息序号（0 或不填表示从最新开始）
             count: 获取数量
 
         Returns:
-            消息列表
+            包含 messages 数组的字典
         """
         if not self.bot:
             return None
 
         try:
-            result = await self.bot.call_action('get_group_msg_history', group_id=group_id, message_id=message_id, count=count)
+            result = await self.bot.call_action('get_group_msg_history', group_id=group_id, message_seq=message_seq, count=count)
             return result
-        except Exception:
+        except Exception as e:
+            logger.debug(f"获取历史消息失败: {e}")
             return None
 
     async def get_group_member_info(self, group_id: int, user_id: int) -> Optional[dict]:
