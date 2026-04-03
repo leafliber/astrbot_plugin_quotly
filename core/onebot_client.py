@@ -19,10 +19,7 @@ class OneBotClient:
         Args:
             event: AstrMessageEvent 对象
         """
-        if hasattr(event, 'message_obj') and event.message_obj:
-            raw_message = getattr(event.message_obj, 'raw_message', None)
-            if raw_message:
-                self.bot = getattr(raw_message, 'bot', None)
+        self.bot = getattr(event, 'bot', None)
 
     async def get_msg(self, message_id: int) -> Optional[dict]:
         """

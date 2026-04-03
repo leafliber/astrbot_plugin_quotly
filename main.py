@@ -76,7 +76,16 @@ class QuotlinPlugin(Star):
             return
 
         # 获取群号（用于后续获取群成员信息）
-        group_id = msg_data.get("group_id") or getattr(event.message_obj, 'group_id', None)
+        # OneBot API 返回的 group_id 是整数，AstrBot 内部使用字符串
+        # 统一转换为整数，因为 OneBot API 需要整数参数
+        group_id = msg_data.get("group_id")
+        if not group_id:
+            group_id_str = getattr(event.message_obj, 'group_id', None)
+            if group_id_str:
+                try:
+                    group_id = int(group_id_str)
+                except (ValueError, TypeError):
+                    group_id = None
 
         # 构建消息列表
         messages_data = [msg_data]
