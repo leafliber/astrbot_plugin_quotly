@@ -117,7 +117,7 @@ class QuotlinPlugin(Star):
 
             if messages_history:
                 # 过滤并排序消息
-                # 1. 过滤掉 message_id >= reply_id 的消息（包括被回复的消息本身）
+                # 1. 过滤掉被回复的消息本身（message_id == reply_id）
                 # 2. 按 message_id 排序（从小到大，即从旧到新）
                 filtered_messages = []
                 for msg in messages_history:
@@ -129,7 +129,9 @@ class QuotlinPlugin(Star):
                         except (ValueError, TypeError):
                             continue
                     
-                    # 只保留 message_id < reply_id 的消息
+                    logger.debug(f"消息 ID: {msg_id}, reply_id: {reply_id}, 比较: {msg_id} < {reply_id} = {msg_id < reply_id}")
+                    
+                    # 只保留 message_id < reply_id 的消息（被回复消息之前的消息）
                     if msg_id is not None and msg_id < reply_id:
                         filtered_messages.append((msg_id, msg))
                 
