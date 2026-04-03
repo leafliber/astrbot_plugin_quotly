@@ -1,6 +1,6 @@
 """
 OneBot11 API 客户端
-通过 AstrBot 的 context 调用 OneBot11 API
+通过 AstrBot 的 event 对象获取 bot 对象来调用 OneBot API
 """
 
 from typing import Optional, Any
@@ -9,8 +9,20 @@ from typing import Optional, Any
 class OneBotClient:
     """OneBot11 API 客户端"""
 
-    def __init__(self, context: Any):
-        self.context = context
+    def __init__(self):
+        self.bot = None
+
+    def set_event(self, event: Any):
+        """
+        从事件对象中提取 bot 对象
+
+        Args:
+            event: AstrMessageEvent 对象
+        """
+        if hasattr(event, 'message_obj') and event.message_obj:
+            raw_message = getattr(event.message_obj, 'raw_message', None)
+            if raw_message:
+                self.bot = getattr(raw_message, 'bot', None)
 
     async def get_msg(self, message_id: int) -> Optional[dict]:
         """
@@ -22,8 +34,11 @@ class OneBotClient:
         Returns:
             消息详情字典，包含 time, message_type, message_id, sender, message 等字段
         """
+        if not self.bot:
+            return None
+
         try:
-            result = await self.context.request("get_msg", {"message_id": message_id})
+            result = await self.bot.call_action('get_msg', message_id=message_id)
             return result
         except Exception as e:
             return None
@@ -38,8 +53,11 @@ class OneBotClient:
         Returns:
             用户信息字典
         """
+        if not self.bot:
+            return None
+
         try:
-            result = await self.context.request("get_stranger_info", {"user_id": user_id})
+            result = await self.bot.call_action('get_stranger_info', user_id=user_id)
             return result
         except Exception as e:
             return None
@@ -69,12 +87,11 @@ class OneBotClient:
         Returns:
             消息列表
         """
+        if not self.bot:
+            return None
+
         try:
-            result = await self.context.request("get_history", {
-                "group_id": group_id,
-                "start_message_id": start_message_id,
-                "count": count
-            })
+            result = await self.bot.call_action('get_group_msg_history', group_id=group_id, start_message_id=start_message_id, count=count)
             return result
         except Exception:
             return None
@@ -90,11 +107,11 @@ class OneBotClient:
         Returns:
             群成员信息字典
         """
+        if not self.bot:
+            return None
+
         try:
-            result = await self.context.request("get_group_member_info", {
-                "group_id": group_id,
-                "user_id": user_id
-            })
+            result = await self.bot.call_action('get_group_member_info', group_id=group_id, user_id=user_id)
             return result
         except Exception:
             return None

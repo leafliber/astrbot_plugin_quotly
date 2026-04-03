@@ -31,7 +31,7 @@ class QuotlinPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         self.parser = MessageParser()
-        self.onebot = OneBotClient(context)
+        self.onebot = OneBotClient()
 
         # 初始化渲染器
         font_dir = Path(__file__).parent / "assets" / "fonts"
@@ -45,6 +45,9 @@ class QuotlinPlugin(Star):
         /q - Create a quote from replied message
         /q <number> - Create quote from multiple messages (includes this message and previous <number>-1 messages)
         """
+        # 设置 OneBot 客户端的 bot 对象
+        self.onebot.set_event(event)
+
         # 解析回复消息 ID
         reply_id = self.parser.parse_reply(event)
 
@@ -72,22 +75,29 @@ class QuotlinPlugin(Star):
             yield event.plain_result("无法获取消息内容，请确认消息是否存在")
             return
 
+        # 获取群号（用于后续获取群成员信息）
+        group_id = msg_data.get("group_id") or getattr(event.message_obj, 'group_id', None)
+
         # 构建消息列表
         messages_data = [msg_data]
 
         # 如果需要多条消息，尝试获取历史
-        if count > 1:
-            # 尝试获取更多消息（通过 get_history API 或其他方式）
-            group_id = msg_data.get("group_id") or event.unified_msg_origin
-            if group_id:
-                history = await self.onebot.get_history(group_id, reply_id, count)
-                if history:
-                    # 过滤出 reply_id 之前的消息
-                    for msg in history:
-                        if msg.get("message_id") < reply_id:
-                            messages_data.insert(0, msg)
-                            if len(messages_data) >= count:
-                                break
+        if count > 1 and group_id:
+            history = await self.onebot.get_history(group_id, reply_id, count)
+            if history and isinstance(history, dict):
+                messages_history = history.get("messages", [])
+            elif history and isinstance(history, list):
+                messages_history = history
+            else:
+                messages_history = []
+
+            if messages_history:
+                # 过滤出 reply_id 之前的消息
+                for msg in messages_history:
+                    if msg.get("message_id") < reply_id:
+                        messages_data.insert(0, msg)
+                        if len(messages_data) >= count:
+                            break
 
         # 渲染消息列表
         try:

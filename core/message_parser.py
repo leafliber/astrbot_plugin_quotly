@@ -43,49 +43,33 @@ class MessageParser:
         if not hasattr(event, 'message_obj') or not event.message_obj:
             return None
 
-        # 获取消息段列表 - 尝试多种访问方式
         message_segments = None
 
-        # 方式1: message_obj.message
         if hasattr(event.message_obj, 'message'):
             message_segments = event.message_obj.message
-
-        # 方式2: message_obj 直接有 __iter__
-        if message_segments is None:
-            try:
-                if hasattr(event.message_obj, '__iter__'):
-                    message_segments = list(event.message_obj)
-            except:
-                pass
 
         if not message_segments:
             return None
 
         for segment in message_segments:
-            # 尝试多种方式获取 segment 类型
-            seg_type = None
-            if isinstance(segment, dict):
-                seg_type = segment.get("type")
-            elif hasattr(segment, 'type'):
-                seg_type = getattr(segment, 'type', None)
-            elif isinstance(segment, str):
+            if isinstance(segment, str):
                 continue
 
-            if seg_type == "reply":
-                # 尝试获取 data
-                data = None
-                if isinstance(segment, dict):
-                    data = segment.get("data", {})
-                elif hasattr(segment, 'data'):
-                    data = getattr(segment, 'data', {})
+            seg_type = None
+            if hasattr(segment, '__class__'):
+                seg_type = segment.__class__.__name__.lower()
+            elif hasattr(segment, 'type'):
+                seg_type = getattr(segment, 'type', None)
 
-                if data:
-                    msg_id = data.get("id") if isinstance(data, dict) else None
+            if seg_type == 'reply':
+                if hasattr(segment, 'id'):
+                    msg_id = getattr(segment, 'id', None)
                     if msg_id is not None:
                         try:
                             return int(msg_id)
                         except (ValueError, TypeError):
                             pass
+
         return None
 
     def parse_sender_info(self, sender: dict) -> tuple[int, str, str]:
