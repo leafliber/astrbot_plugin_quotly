@@ -76,14 +76,16 @@ class TestMessageParser:
         sender = {
             "user_id": 123456,
             "nickname": "测试用户",
-            "card": "群名片"
+            "card": "群名片",
+            "title": "专属头衔"
         }
 
-        user_id, nickname, card = self.parser.parse_sender_info(sender)
+        user_id, nickname, card, title = self.parser.parse_sender_info(sender)
 
         assert user_id == 123456
         assert nickname == "测试用户"
         assert card == "群名片"
+        assert title == "专属头衔"
 
     def test_parse_sender_info_with_empty_card(self):
         """测试解析发送者信息（无群名片）"""
@@ -92,11 +94,12 @@ class TestMessageParser:
             "nickname": "测试用户"
         }
 
-        user_id, nickname, card = self.parser.parse_sender_info(sender)
+        user_id, nickname, card, title = self.parser.parse_sender_info(sender)
 
         assert user_id == 123456
         assert nickname == "测试用户"
         assert card == ""
+        assert title == ""
 
     def test_parse_message_content_with_text(self):
         """测试解析纯文本消息"""

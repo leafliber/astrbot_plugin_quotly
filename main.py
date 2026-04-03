@@ -135,16 +135,14 @@ class QuotlinPlugin(Star):
             render_messages = []
             for msg_data_item in messages_data:
                 sender = msg_data_item.get("sender", {})
-                user_id, nickname, card = self.parser.parse_sender_info(sender)
+                user_id, nickname, card, title = self.parser.parse_sender_info(sender)
                 content = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
 
                 if not content:
                     content = "[仅包含媒体消息]"
 
-                # 获取群头衔（如果有的话）
-                title = ""
-                if group_id and user_id:
+                if not title and group_id and user_id:
                     member_info = await self.onebot.get_group_member_info(group_id, user_id)
                     if member_info:
                         title = member_info.get("title", "")
