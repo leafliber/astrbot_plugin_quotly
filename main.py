@@ -5,8 +5,14 @@ AstrBot Quotlin Plugin
 
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
+
+# 将插件目录添加到模块搜索路径
+_plugin_dir = Path(__file__).parent
+if str(_plugin_dir) not in sys.path:
+    sys.path.insert(0, str(_plugin_dir))
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
