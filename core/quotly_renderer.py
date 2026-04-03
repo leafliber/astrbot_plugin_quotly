@@ -381,19 +381,29 @@ class QuotlyRenderer:
         """
         import re
 
-        # 转义 HTML 特殊字符
-        escaped = self._escape_html(content)
-
-        # 匹配 [图片](url) 格式
-        pattern = r'\[图片\]\(([^)]+)\)'
-
-        def replace_image(match):
+        # 先提取图片标签和 URL，避免 URL 被转义
+        image_pattern = r'\[图片\]\(([^)]+)\)'
+        images = []
+        
+        def save_image(match):
             url = match.group(1)
-            return f'<img class="msg-image" src="{url}" onerror="this.style.display=\'none\'">'
-
-        # 替换图片标签，同时保留换行
-        result = re.sub(pattern, replace_image, escaped)
+            placeholder = f"__IMAGE_PLACEHOLDER_{len(images)}__"
+            images.append(url)
+            return placeholder
+        
+        # 临时替换图片标签
+        content_temp = re.sub(image_pattern, save_image, content)
+        
+        # 转义 HTML 特殊字符
+        escaped = self._escape_html(content_temp)
+        
+        # 恢复图片标签
+        for i, url in enumerate(images):
+            placeholder = f"__IMAGE_PLACEHOLDER_{i}__"
+            img_tag = f'<img class="msg-image" src="{url}" onerror="this.style.display=\'none\'">'
+            escaped = escaped.replace(placeholder, img_tag)
+        
         # 将换行符转换为 <br>
-        result = result.replace('\n', '<br>')
+        result = escaped.replace('\n', '<br>')
 
         return result

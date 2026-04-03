@@ -102,7 +102,7 @@ class MessageParser:
             message: OneBot11 message 数组
 
         Returns:
-            纯文本内容
+            纯文本内容，图片使用 [图片](url) 格式
         """
         if not message:
             return ""
@@ -115,7 +115,12 @@ class MessageParser:
                 if seg_type == "text":
                     text_parts.append(seg_data.get("text", ""))
                 elif seg_type == "image":
-                    text_parts.append("[图片]")
+                    # 使用 [图片](url) 格式，以便后续解析
+                    image_url = seg_data.get("url", "") or seg_data.get("file", "")
+                    if image_url:
+                        text_parts.append(f"[图片]({image_url})")
+                    else:
+                        text_parts.append("[图片]")
                 elif seg_type == "record":
                     text_parts.append("[语音]")
                 elif seg_type == "video":
@@ -124,13 +129,18 @@ class MessageParser:
                     text_parts.append(f"@{seg_data.get('name', '')}")
                 elif seg_type == "reply":
                     text_parts.append("[回复]")
-                # 可以继续添加其他类型...
             elif hasattr(segment, 'type'):
-                # 可能是消息段对象
                 if segment.type == "text":
                     text_parts.append(getattr(segment.data, 'get', lambda x: "")("text"))
                 elif segment.type == "image":
-                    text_parts.append("[图片]")
+                    # 尝试获取图片 URL
+                    if hasattr(segment, 'data'):
+                        image_url = ""
+                        if isinstance(segment.data, dict):
+                            image_url = segment.data.get("url", "") or segment.data.get("file", "")
+                        text_parts.append(f"[图片]({image_url})" if image_url else "[图片]")
+                    else:
+                        text_parts.append("[图片]")
 
         return "".join(text_parts).strip()
 
