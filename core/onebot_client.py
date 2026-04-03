@@ -21,6 +21,11 @@ class OneBotClient:
             event: AstrMessageEvent 对象
         """
         self.bot = getattr(event, 'bot', None)
+        # bot.api 是真正的 API 调用对象
+        if self.bot and hasattr(self.bot, 'api'):
+            self.api = self.bot.api
+        else:
+            self.api = self.bot
 
     async def get_msg(self, message_id: int) -> Optional[dict]:
         """
@@ -32,11 +37,11 @@ class OneBotClient:
         Returns:
             消息详情字典，包含 time, message_type, message_id, sender, message 等字段
         """
-        if not self.bot:
+        if not self.api:
             return None
 
         try:
-            result = await self.bot.call_action('get_msg', message_id=message_id)
+            result = await self.api.call_action('get_msg', message_id=message_id)
             return result
         except Exception as e:
             return None
@@ -51,11 +56,11 @@ class OneBotClient:
         Returns:
             用户信息字典
         """
-        if not self.bot:
+        if not self.api:
             return None
 
         try:
-            result = await self.bot.call_action('get_stranger_info', user_id=user_id)
+            result = await self.api.call_action('get_stranger_info', user_id=user_id)
             return result
         except Exception as e:
             return None
@@ -85,11 +90,21 @@ class OneBotClient:
         Returns:
             包含 messages 数组的字典
         """
-        if not self.bot:
+        if not self.api:
             return None
 
         try:
-            result = await self.bot.call_action('get_group_msg_history', group_id=group_id, message_seq=message_seq, count=count)
+            result = await self.api.call_action('get_group_msg_history', group_id=group_id, message_seq=message_seq, count=count)
+            logger.debug(f"get_history 原始返回: {result if not result or len(str(result)) < 500 else str(result)[:500] + '...'}")
+            
+            # AstrBot 的 call_action 可能返回 data 字段或整个响应
+            if isinstance(result, dict):
+                # 如果返回的是完整响应，提取 data 字段
+                if 'data' in result:
+                    return result['data']
+                # 如果返回的直接就是 data
+                return result
+            
             return result
         except Exception as e:
             logger.debug(f"获取历史消息失败: {e}")
@@ -106,11 +121,11 @@ class OneBotClient:
         Returns:
             群成员信息字典
         """
-        if not self.bot:
+        if not self.api:
             return None
 
         try:
-            result = await self.bot.call_action('get_group_member_info', group_id=group_id, user_id=user_id)
+            result = await self.api.call_action('get_group_member_info', group_id=group_id, user_id=user_id)
             return result
         except Exception:
             return None

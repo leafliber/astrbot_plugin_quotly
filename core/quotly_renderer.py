@@ -32,8 +32,13 @@ class QuotlyRenderer:
         
         # 优先使用鸿蒙字体，如果不存在则使用思源黑体
         font_path = self.font_dir / "HarmonyOS_Sans_SC_Regular.ttf"
-        if not font_path.exists():
+        if font_path.exists():
+            self.font_name = "HarmonyOS Sans SC"
+            self.font_format = "truetype"
+        else:
             font_path = self.font_dir / "SourceHanSansCN-Regular.otf"
+            self.font_name = "SourceHanSansCN"
+            self.font_format = "opentype"
 
         # 读取字体文件并转为 base64
         with open(font_path, 'rb') as f:
@@ -50,12 +55,9 @@ class QuotlyRenderer:
                 self._browser = await self._playwright.chromium.launch(
                     headless=True,
                     args=[
-                        '--disable-font-subpixel-positioning',
-                        '--disable-lcd-text',
                         '--disable-gpu',
                         '--disable-gpu-compositing',
                         '--disable-software-rasterizer',
-                        '--font-render-hinting=none',
                     ]
                 )
                 logger.debug("浏览器实例已启动")
@@ -182,8 +184,11 @@ class QuotlyRenderer:
     <meta charset="UTF-8">
     <style>
         @font-face {{
-            font-family: 'SourceHanSansCN';
-            src: url('data:font/otf;base64,{self.font_base64}');
+            font-family: '{self.font_name}';
+            src: url('data:font/{self.font_format};base64,{self.font_base64}') format('{self.font_format}');
+            font-weight: normal;
+            font-style: normal;
+            font-display: block;
         }}
 
         * {{
@@ -193,7 +198,7 @@ class QuotlyRenderer:
         }}
 
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'Source Han Sans CN', sans-serif;
+            font-family: '{self.font_name}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             background: #e8e8ed;
             padding: 0;
             display: inline-flex;

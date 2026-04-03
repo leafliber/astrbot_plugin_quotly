@@ -96,6 +96,7 @@ class QuotlinPlugin(Star):
         # 如果需要多条消息，尝试获取历史
         if count > 1 and group_id:
             logger.debug(f"尝试获取历史消息: group_id={group_id}, message_seq={message_seq}, count={count}")
+            # 使用 message_seq 获取历史消息（从这条消息开始往前获取）
             history = await self.onebot.get_history(group_id, message_seq, count)
             logger.debug(f"历史消息返回类型: {type(history)}, 内容: {history if not history or len(str(history)) < 500 else str(history)[:500] + '...'}")
             
