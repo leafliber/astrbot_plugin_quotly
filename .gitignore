@@ -34,3 +34,7 @@ Thumbs.db
 
 # Playwright
 .playwright/
+
+# docs
+plan.md
+claude.md
