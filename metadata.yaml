@@ -1,10 +1,10 @@
-name: quotly复刻 语录图片生成器
-id: astrbot_plugin_quotly
+name: astrbot_plugin_quotly
+display_name: Quotly复刻 语录图片生成器
+desc: 将消息渲染为精美的引用图片，复刻自 quote-bot
 version: 1.0.0
 author: leafiber
-description: 将消息渲染为精美的引用图片，复刻自 quote-bot
+repo: https://github.com/leafliber/astrbot_plugin_quotly
+required_astrbot_version: ">=4.0.0"
 support_platforms:
   - onebot:group
   - onebot:private
-repo: https://github.com/leafliber/astrbot_plugin_quotly
-required_astrbot_version: ">=4.0.0"
