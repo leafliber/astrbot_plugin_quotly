@@ -542,7 +542,7 @@ class QuotlyRenderer:
         # 恢复图片标签
         for i, url in enumerate(images):
             placeholder = f"__IMAGE_PLACEHOLDER_{i}__"
-            img_tag = f'<img class="msg-image" src="{url}" onerror="this.style.display=\'none\'">'
+            img_tag = f'<img class="msg-image" src="{url}" alt="[图片]" onerror="this.outerHTML=\'[图片]\'">'
             escaped = escaped.replace(placeholder, img_tag)
         
         # 将换行符转换为 <br>

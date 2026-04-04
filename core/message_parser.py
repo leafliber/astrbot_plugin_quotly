@@ -132,6 +132,19 @@ class MessageParser:
                         text_parts.append(f"[图片]({image_url})")
                     else:
                         text_parts.append("[图片]")
+                elif seg_type == "face":
+                    # QQ 表情，使用 [表情] 格式
+                    face_id = seg_data.get("id", "")
+                    face_name = seg_data.get("name", "") or f"表情{face_id}"
+                    text_parts.append(f"[{face_name}]")
+                elif seg_type == "mface":
+                    # 魔法表情/大表情，尝试获取 URL
+                    mface_url = seg_data.get("url", "")
+                    mface_summary = seg_data.get("summary", "表情")
+                    if mface_url:
+                        text_parts.append(f"[图片]({mface_url})")
+                    else:
+                        text_parts.append(f"[{mface_summary}]")
                 elif seg_type == "record":
                     text_parts.append("[语音]")
                 elif seg_type == "video":
