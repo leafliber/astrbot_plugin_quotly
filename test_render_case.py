@@ -99,9 +99,37 @@ async def test_render():
             "title": "",
             "role": "member",
             "user_id": 789789789,
-            "content": "测试图片：[图片](https://via.placeholder.com/300x200)",
+            "content": "测试图片：[图片](https://q.qlogo.cn/headimg_dl?dst_uin=10002&spec=100)",
             "time_str": "12:07",
             "avatar_url": ""
+        },
+        {
+            "nickname": "郑十一",
+            "card": "",
+            "title": "",
+            "role": "member",
+            "user_id": 321321321,
+            "content": "这是一条回复消息",
+            "time_str": "12:08",
+            "avatar_url": "",
+            "reply_info": {
+                "nickname": "张三",
+                "content": "这是群主的消息，测试群主头衔显示"
+            }
+        },
+        {
+            "nickname": "王十二",
+            "card": "",
+            "title": "",
+            "role": "member",
+            "user_id": 654654654,
+            "content": "回复图片消息：[图片](https://q.qlogo.cn/headimg_dl?dst_uin=10002&spec=100)",
+            "time_str": "12:09",
+            "avatar_url": "",
+            "reply_info": {
+                "nickname": "吴十",
+                "content": "测试图片：[图片]"
+            }
         }
     ]
     

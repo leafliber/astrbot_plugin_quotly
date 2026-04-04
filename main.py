@@ -164,7 +164,7 @@ class QuotlinPlugin(Star):
             for msg_data_item in messages_data:
                 sender = msg_data_item.get("sender", {})
                 user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
-                content = self.parser.parse_message_content(msg_data_item.get("message", []))
+                content, inner_reply_id = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
 
                 if not content:
@@ -175,6 +175,27 @@ class QuotlinPlugin(Star):
                     if member_info:
                         title = member_info.get("title", "")
 
+                # 处理消息内的回复
+                reply_info = None
+                if inner_reply_id:
+                    try:
+                        reply_msg = await self.onebot.get_msg(inner_reply_id)
+                        if reply_msg:
+                            reply_sender = reply_msg.get("sender", {})
+                            reply_user_id, reply_nickname, reply_card, _, _ = self.parser.parse_sender_info(reply_sender)
+                            reply_content, _ = self.parser.parse_message_content(reply_msg.get("message", []))
+                            
+                            # 截取回复内容预览（最多50字符）
+                            if len(reply_content) > 50:
+                                reply_content = reply_content[:50] + "..."
+                            
+                            reply_info = {
+                                "nickname": reply_card if reply_card else reply_nickname,
+                                "content": reply_content if reply_content else "[媒体消息]"
+                            }
+                    except Exception as e:
+                        logger.debug(f"获取回复消息失败: {e}")
+
                 render_messages.append({
                     "nickname": nickname,
                     "card": card,
@@ -183,7 +204,8 @@ class QuotlinPlugin(Star):
                     "user_id": user_id,
                     "content": content,
                     "time_str": time_str,
-                    "avatar_url": self.onebot.get_avatar_url(user_id)
+                    "avatar_url": self.onebot.get_avatar_url(user_id),
+                    "reply_info": reply_info
                 })
 
             # 渲染图片

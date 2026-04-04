@@ -94,20 +94,24 @@ class MessageParser:
         role = sender.get("role", "member")
         return user_id, nickname, card, title, role
 
-    def parse_message_content(self, message: list) -> str:
+    def parse_message_content(self, message: list) -> tuple[str, Optional[int]]:
         """
-        解析消息内容，提取纯文本
+        解析消息内容，提取纯文本和回复信息
 
         Args:
             message: OneBot11 message 数组
 
         Returns:
-            纯文本内容，图片使用 [图片](url) 格式
+            (纯文本内容, 回复消息ID)
+            - 纯文本内容：图片使用 [图片](url) 格式
+            - 回复消息ID：如果消息包含回复，则返回被回复的消息ID，否则返回 None
         """
         if not message:
-            return ""
+            return "", None
 
         text_parts = []
+        reply_id = None
+        
         for segment in message:
             if isinstance(segment, dict):
                 seg_type = segment.get("type")
@@ -128,7 +132,13 @@ class MessageParser:
                 elif seg_type == "at":
                     text_parts.append(f"@{seg_data.get('name', '')}")
                 elif seg_type == "reply":
-                    text_parts.append("[回复]")
+                    # 提取回复消息 ID
+                    reply_id = seg_data.get("id")
+                    if reply_id is not None:
+                        try:
+                            reply_id = int(reply_id)
+                        except (ValueError, TypeError):
+                            reply_id = None
             elif hasattr(segment, 'type'):
                 if segment.type == "text":
                     text_parts.append(getattr(segment.data, 'get', lambda x: "")("text"))
@@ -141,8 +151,17 @@ class MessageParser:
                         text_parts.append(f"[图片]({image_url})" if image_url else "[图片]")
                     else:
                         text_parts.append("[图片]")
+                elif segment.type == "reply":
+                    # 提取回复消息 ID
+                    if hasattr(segment, 'id'):
+                        reply_id = getattr(segment, 'id', None)
+                        if reply_id is not None:
+                            try:
+                                reply_id = int(reply_id)
+                            except (ValueError, TypeError):
+                                reply_id = None
 
-        return "".join(text_parts).strip()
+        return "".join(text_parts).strip(), reply_id
 
     def format_time(self, timestamp: int) -> str:
         """

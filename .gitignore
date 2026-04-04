@@ -26,6 +26,7 @@ htmlcov/
 # Local test files
 demo.png
 test.jpg
+test_*.png
 generate_demo.py
 
 # OS
@@ -38,3 +39,6 @@ Thumbs.db
 # docs
 plan.md
 claude.md
+
+# temp
+/data/

@@ -137,6 +137,7 @@ class QuotlyRenderer:
             content = self._escape_html(msg.get('content', ''))
             time_str = self._escape_html(msg.get('time_str', ''))
             avatar_url = msg.get('avatar_url', '')
+            reply_info = msg.get('reply_info')  # 回复信息
 
             # 头像 HTML
             if avatar_url:
@@ -163,6 +164,18 @@ class QuotlyRenderer:
             if time_str:
                 header_html += f'<span class="time">{time_str}</span>'
 
+            # 回复预览 HTML
+            reply_html = ""
+            if reply_info:
+                reply_nickname = self._escape_html(reply_info.get('nickname', ''))
+                reply_content = self._escape_html(reply_info.get('content', ''))
+                reply_html = f'''
+                <div class="reply-preview">
+                    <span class="reply-arrow">↩</span>
+                    <span class="reply-nickname">{reply_nickname}</span>
+                    <span class="reply-content">{reply_content}</span>
+                </div>'''
+
             # 处理消息内容，支持 [图片](url) 格式
             content_html = self._parse_content(content)
 
@@ -175,6 +188,7 @@ class QuotlyRenderer:
                 <div class="content-wrapper">
                     <div class="message-header">{header_html}</div>
                     <div class="bubble">
+                        {reply_html}
                         <div class="message-content">{content_html}</div>
                     </div>
                 </div>
@@ -307,6 +321,7 @@ class QuotlyRenderer:
             overflow-wrap: break-word;
             display: inline-block;
             width: fit-content;
+            box-sizing: border-box;
         }}
 
         .message-content {{
@@ -315,7 +330,7 @@ class QuotlyRenderer:
             color: #1a1a1a;
             white-space: pre-wrap;
             word-break: break-word;
-            display: inline;
+            display: block;
         }}
 
         .msg-image {{
@@ -329,6 +344,39 @@ class QuotlyRenderer:
             display: block;
             object-fit: contain;
         }}
+
+        /* 回复预览样式 */
+        .reply-preview {{
+            background: #f5f5f5;
+            border-left: 3px solid #999;
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            font-size: 26px;
+            color: #666;
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+
+        .reply-arrow {{
+            color: #999;
+            margin-right: 6px;
+        }}
+
+        .reply-nickname {{
+            color: #576b95;
+            font-weight: 500;
+            margin-right: 6px;
+        }}
+
+        .reply-content {{
+            color: #666;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
     </style>
 </head>
 <body>
@@ -340,41 +388,49 @@ class QuotlyRenderer:
         const bubbles = document.querySelectorAll('.bubble');
         bubbles.forEach(bubble => {{
             const content = bubble.querySelector('.message-content');
+            const replyPreview = bubble.querySelector('.reply-preview');
             if (!content) return;
             
-            // 使用 Range API 精确测量每一行的宽度
-            const range = document.createRange();
-            range.selectNodeContents(content);
+            // 测量消息内容的宽度
+            const contentRange = document.createRange();
+            contentRange.selectNodeContents(content);
+            const contentRects = contentRange.getClientRects();
             
-            const rects = range.getClientRects();
-            if (rects.length === 0) {{
-                // 如果无法获取 rects，使用备用方法
-                const originalWidth = bubble.style.width;
-                bubble.style.width = 'auto';
-                const actualWidth = bubble.scrollWidth;
-                bubble.style.width = originalWidth;
-                
-                const minWidth = 100;
-                const maxWidth = 1100;
-                const finalWidth = Math.min(Math.max(actualWidth, minWidth), maxWidth);
-                bubble.style.width = finalWidth + 'px';
-                return;
-            }}
-            
-            // 找出最宽的一行
-            let maxLineWidth = 0;
-            for (let i = 0; i < rects.length; i++) {{
-                if (rects[i].width > maxLineWidth) {{
-                    maxLineWidth = rects[i].width;
+            let maxContentWidth = 0;
+            if (contentRects.length > 0) {{
+                for (let i = 0; i < contentRects.length; i++) {{
+                    if (contentRects[i].width > maxContentWidth) {{
+                        maxContentWidth = contentRects[i].width;
+                    }}
                 }}
+            }} else {{
+                // 备用方法
+                maxContentWidth = content.scrollWidth;
             }}
             
-            // 添加 padding 和一些余量（避免字符边缘换行）
-            const padding = 50; // 左右 padding + 额外余量
+            // 测量回复预览的宽度（如果存在）
+            let replyWidth = 0;
+            if (replyPreview) {{
+                // 临时移除 max-width 限制来测量实际宽度
+                const originalMaxWidth = replyPreview.style.maxWidth;
+                replyPreview.style.maxWidth = 'none';
+                replyPreview.style.width = 'auto';
+                replyWidth = replyPreview.scrollWidth;
+                replyPreview.style.maxWidth = originalMaxWidth;
+                replyPreview.style.width = '';
+            }}
+            
+            // 取两者的最大值
+            const maxLineWidth = Math.max(maxContentWidth, replyWidth);
+            
+            // 气泡使用 box-sizing: border-box，padding 已包含在宽度内
+            // 只需添加少量余量避免字符边缘换行
+            const extraPadding = 5; // 额外余量
             const minWidth = 100;
             const maxWidth = 1100;
             
-            const finalWidth = Math.min(Math.max(maxLineWidth + padding, minWidth), maxWidth);
+            // 最终宽度 = 内容宽度 + 气泡左右 padding (40px) + 额外余量
+            const finalWidth = Math.min(Math.max(maxLineWidth + 40 + extraPadding, minWidth), maxWidth);
             bubble.style.width = finalWidth + 'px';
         }});
     }}
