@@ -168,12 +168,15 @@ class QuotlyRenderer:
             reply_html = ""
             if reply_info:
                 reply_nickname = self._escape_html(reply_info.get('nickname', ''))
-                reply_content = self._escape_html(reply_info.get('content', ''))
+                reply_content = reply_info.get('content', '')
+                reply_content_html = self._parse_content(reply_content)
                 reply_html = f'''
                 <div class="reply-preview">
-                    <span class="reply-arrow">↩</span>
-                    <span class="reply-nickname">{reply_nickname}</span>
-                    <span class="reply-content">{reply_content}</span>
+                    <div class="reply-header">
+                        <span class="reply-arrow">↩</span>
+                        <span class="reply-nickname">{reply_nickname}</span>
+                    </div>
+                    <div class="reply-content">{reply_content_html}</div>
                 </div>'''
 
             # 处理消息内容，支持 [图片](url) 格式
@@ -356,9 +359,10 @@ class QuotlyRenderer:
             color: #666;
             display: block;
             max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+        }}
+
+        .reply-header {{
+            display: inline;
         }}
 
         .reply-arrow {{
@@ -374,8 +378,19 @@ class QuotlyRenderer:
 
         .reply-content {{
             color: #666;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            margin-top: 4px;
+        }}
+        
+        .reply-content .msg-image {{
+            max-width: 150px;
+            min-width: 50px;
+            max-height: 80px;
+            width: auto;
+            height: auto;
+            border-radius: 4px;
+            vertical-align: middle;
+            margin: 4px 0;
+            display: block;
         }}
     </style>
 </head>

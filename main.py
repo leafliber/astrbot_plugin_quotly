@@ -164,7 +164,20 @@ class QuotlinPlugin(Star):
             for msg_data_item in messages_data:
                 sender = msg_data_item.get("sender", {})
                 user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
-                content, inner_reply_id = self.parser.parse_message_content(msg_data_item.get("message", []))
+                
+                msg_content = msg_data_item.get("message", [])
+                logger.debug(f"解析消息内容: message 类型={type(msg_content)}, 内容={msg_content}")
+                
+                parse_result = self.parser.parse_message_content(msg_content)
+                logger.debug(f"parse_message_content 返回值: 类型={type(parse_result)}, 值={parse_result}")
+                
+                if not isinstance(parse_result, tuple) or len(parse_result) != 2:
+                    logger.error(f"parse_message_content 返回值异常: {parse_result}")
+                    content = str(msg_content) if msg_content else "[空消息]"
+                    inner_reply_id = None
+                else:
+                    content, inner_reply_id = parse_result
+                    
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
 
                 if not content:
@@ -225,7 +238,9 @@ class QuotlinPlugin(Star):
                     os.remove(temp_path)
 
         except Exception as e:
+            import traceback
             logger.error(f"渲染失败: {e}")
+            logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染失败: {str(e)}")
 
     async def terminate(self):

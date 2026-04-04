@@ -72,7 +72,7 @@ class MessageParser:
 
         return None
 
-    def parse_sender_info(self, sender: dict) -> tuple[int, str, str, str, str]:
+    def parse_sender_info(self, sender) -> tuple[int, str, str, str, str]:
         """
         解析发送者信息
 
@@ -87,6 +87,8 @@ class MessageParser:
             - title: 专属头衔
             - role: 角色 (owner/admin/member)
         """
+        if not sender or not isinstance(sender, dict):
+            return 0, "", "", "", "member"
         user_id = sender.get("user_id", 0)
         nickname = sender.get("nickname", "")
         card = sender.get("card", "")
@@ -94,7 +96,7 @@ class MessageParser:
         role = sender.get("role", "member")
         return user_id, nickname, card, title, role
 
-    def parse_message_content(self, message: list) -> tuple[str, Optional[int]]:
+    def parse_message_content(self, message) -> tuple[str, Optional[int]]:
         """
         解析消息内容，提取纯文本和回复信息
 
@@ -108,6 +110,11 @@ class MessageParser:
         """
         if not message:
             return "", None
+
+        if not isinstance(message, (list, tuple)):
+            if isinstance(message, str):
+                return message, None
+            return str(message), None
 
         text_parts = []
         reply_id = None

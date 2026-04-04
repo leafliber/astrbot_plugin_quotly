@@ -128,7 +128,7 @@ async def test_render():
             "avatar_url": "",
             "reply_info": {
                 "nickname": "吴十",
-                "content": "测试图片：[图片]"
+                "content": "测试图片：[图片](https://q.qlogo.cn/headimg_dl?dst_uin=10002&spec=100)"
             }
         }
     ]
