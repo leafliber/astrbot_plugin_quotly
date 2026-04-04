@@ -319,9 +319,15 @@ class QuotlyRenderer:
         }}
 
         .msg-image {{
-            max-width: 100%;
+            max-width: 600px;
+            min-width: 300px;
+            width: auto;
+            max-height: 800px;
+            height: auto;
             border-radius: 8px;
-            margin-top: 5px;
+            margin-top: 8px;
+            display: block;
+            object-fit: contain;
         }}
     </style>
 </head>
@@ -336,21 +342,86 @@ class QuotlyRenderer:
             const content = bubble.querySelector('.message-content');
             if (!content) return;
             
-            // 获取气泡实际需要的宽度
-            const actualWidth = bubble.scrollWidth;
-            const minWidth = 100; // 最小宽度
-            const maxWidth = 1100; // 最大宽度（留出 padding）
+            // 使用 Range API 精确测量每一行的宽度
+            const range = document.createRange();
+            range.selectNodeContents(content);
             
-            // 设置合适的宽度（限制在最小和最大宽度之间）
-            const finalWidth = Math.min(Math.max(actualWidth, minWidth), maxWidth);
+            const rects = range.getClientRects();
+            if (rects.length === 0) {{
+                // 如果无法获取 rects，使用备用方法
+                const originalWidth = bubble.style.width;
+                bubble.style.width = 'auto';
+                const actualWidth = bubble.scrollWidth;
+                bubble.style.width = originalWidth;
+                
+                const minWidth = 100;
+                const maxWidth = 1100;
+                const finalWidth = Math.min(Math.max(actualWidth, minWidth), maxWidth);
+                bubble.style.width = finalWidth + 'px';
+                return;
+            }}
+            
+            // 找出最宽的一行
+            let maxLineWidth = 0;
+            for (let i = 0; i < rects.length; i++) {{
+                if (rects[i].width > maxLineWidth) {{
+                    maxLineWidth = rects[i].width;
+                }}
+            }}
+            
+            // 添加 padding 和一些余量（避免字符边缘换行）
+            const padding = 50; // 左右 padding + 额外余量
+            const minWidth = 100;
+            const maxWidth = 1100;
+            
+            const finalWidth = Math.min(Math.max(maxLineWidth + padding, minWidth), maxWidth);
             bubble.style.width = finalWidth + 'px';
         }});
     }}
     
+    // 等待所有图片加载完成后再调整宽度
+    function waitForImagesAndAdjust() {{
+        const images = document.querySelectorAll('.msg-image');
+        let loadedCount = 0;
+        const totalImages = images.length;
+        
+        if (totalImages === 0) {{
+            adjustBubbleWidth();
+            return;
+        }}
+        
+        images.forEach(img => {{
+            if (img.complete) {{
+                loadedCount++;
+                if (loadedCount === totalImages) {{
+                    adjustBubbleWidth();
+                }}
+            }} else {{
+                img.onload = () => {{
+                    loadedCount++;
+                    if (loadedCount === totalImages) {{
+                        adjustBubbleWidth();
+                    }}
+                }};
+                img.onerror = () => {{
+                    loadedCount++;
+                    if (loadedCount === totalImages) {{
+                        adjustBubbleWidth();
+                    }}
+                }};
+            }}
+        }});
+        
+        // 超时保护：最多等待 3 秒
+        setTimeout(() => {{
+            adjustBubbleWidth();
+        }}, 3000);
+    }}
+    
     if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', adjustBubbleWidth);
+        document.addEventListener('DOMContentLoaded', waitForImagesAndAdjust);
     }} else {{
-        adjustBubbleWidth();
+        waitForImagesAndAdjust();
     }}
     </script>
 </body>
