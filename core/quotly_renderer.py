@@ -250,8 +250,8 @@ class QuotlyRenderer:
         }}
 
         .avatar, .avatar-placeholder {{
-            width: 100px;
-            height: 100px;
+            width: 80px;
+            height: 80px;
             border-radius: 50%;
             object-fit: cover;
         }}
@@ -262,7 +262,7 @@ class QuotlyRenderer:
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 36px;
+            font-size: 28px;
             font-weight: 500;
         }}
 
