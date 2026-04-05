@@ -169,7 +169,7 @@ class QuotlyRenderer:
             if reply_info:
                 reply_nickname = self._escape_html(reply_info.get('nickname', ''))
                 reply_content = reply_info.get('content', '')
-                reply_content_html = self._parse_content(reply_content)
+                reply_content_html, _ = self._parse_content(reply_content)
                 reply_html = f'''
                 <div class="reply-preview">
                     <div class="reply-header">
@@ -179,8 +179,17 @@ class QuotlyRenderer:
                     <div class="reply-content">{reply_content_html}</div>
                 </div>'''
 
-            # 处理消息内容，支持 [图片](url) 格式
-            content_html = self._parse_content(content)
+            # 检查是否只有一张图片（没有回复预览时才生效）
+            is_image_only, image_url = self._is_image_only(content)
+            bubble_class = "bubble"
+            content_html = ""
+            
+            if is_image_only and not reply_html:
+                bubble_class = "bubble image-only"
+                content_html = f'<img class="msg-image-full" src="{image_url}" alt="[图片]" onerror="this.outerHTML=\'[图片]\'">'
+            else:
+                content_html_parsed, _ = self._parse_content(content)
+                content_html = f'<div class="message-content">{content_html_parsed}</div>'
 
             # 消息气泡
             messages_html += f"""
@@ -190,9 +199,8 @@ class QuotlyRenderer:
                 </div>
                 <div class="content-wrapper">
                     <div class="message-header">{header_html}</div>
-                    <div class="bubble">
-                        {reply_html}
-                        <div class="message-content">{content_html}</div>
+                    <div class="{bubble_class}">
+                        {reply_html}{content_html}
                     </div>
                 </div>
             </div>
@@ -348,6 +356,24 @@ class QuotlyRenderer:
             object-fit: contain;
         }}
 
+        /* 纯图片消息气泡样式 - 图片填满气泡 */
+        .bubble.image-only {{
+            padding: 0;
+            overflow: hidden;
+            line-height: 0;
+        }}
+
+        .msg-image-full {{
+            display: block;
+            max-width: 600px;
+            min-width: 200px;
+            width: auto;
+            max-height: 800px;
+            height: auto;
+            border-radius: 24px;
+            object-fit: cover;
+        }}
+
         /* 回复预览样式 */
         .reply-preview {{
             background: #f5f5f5;
@@ -402,6 +428,11 @@ class QuotlyRenderer:
     function adjustBubbleWidth() {{
         const bubbles = document.querySelectorAll('.bubble');
         bubbles.forEach(bubble => {{
+            // 跳过纯图片气泡
+            if (bubble.classList.contains('image-only')) {{
+                return;
+            }}
+            
             const content = bubble.querySelector('.message-content');
             const replyPreview = bubble.querySelector('.reply-preview');
             if (!content) return;
@@ -452,7 +483,7 @@ class QuotlyRenderer:
     
     // 等待所有图片加载完成后再调整宽度
     function waitForImagesAndAdjust() {{
-        const images = document.querySelectorAll('.msg-image');
+        const images = document.querySelectorAll('.msg-image, .msg-image-full');
         let loadedCount = 0;
         const totalImages = images.length;
         
@@ -511,7 +542,7 @@ class QuotlyRenderer:
                 .replace('"', "&quot;")
                 .replace("'", "&#39;"))
 
-    def _parse_content(self, content: str) -> str:
+    def _parse_content(self, content: str) -> tuple:
         """
         解析消息内容，支持 [图片](url) 格式
 
@@ -519,7 +550,7 @@ class QuotlyRenderer:
             content: 原始消息内容
 
         Returns:
-            包含 HTML 标签的内容
+            (包含 HTML 标签的内容, 图片数量)
         """
         import re
 
@@ -548,4 +579,29 @@ class QuotlyRenderer:
         # 将换行符转换为 <br>
         result = escaped.replace('\n', '<br>')
 
-        return result
+        return result, len(images)
+
+    def _is_image_only(self, content: str) -> tuple:
+        """
+        检查消息内容是否只有一张图片（没有其他文字内容）
+
+        Args:
+            content: 原始消息内容
+
+        Returns:
+            (是否只有一张图片, 图片URL)
+        """
+        import re
+        
+        image_pattern = r'\[图片\]\(([^)]+)\)'
+        matches = list(re.finditer(image_pattern, content))
+        
+        if len(matches) != 1:
+            return False, None
+        
+        # 检查除了图片标签外是否还有其他内容
+        remaining = re.sub(image_pattern, '', content).strip()
+        if remaining:
+            return False, None
+        
+        return True, matches[0].group(1)
