@@ -4,6 +4,6 @@ desc: 将消息渲染为精美的引用图片，复刻自 quote-bot
 version: 1.0.0
 author: leafiber
 repo: https://github.com/leafliber/astrbot_plugin_quotly
-required_astrbot_version: ">=4.0.0"
+astrbot_version: ">=4.0.0"
 support_platforms:
   - aiocqhttp

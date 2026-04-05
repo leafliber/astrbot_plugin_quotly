@@ -22,6 +22,8 @@ import astrbot.api.message_components as Comp
 from core.onebot_client import OneBotClient
 from core.message_parser import MessageParser
 from core.quotly_renderer import QuotlyRenderer
+from core.database import QuotlyDatabase
+from utils.image_hash import compute_phash
 
 
 @register("quotly", "Leafiber", "将消息渲染为精美的引用图片", "1.0.0")
@@ -33,9 +35,11 @@ class QuotlinPlugin(Star):
         self.parser = MessageParser()
         self.onebot = OneBotClient()
 
-        # 初始化渲染器
         font_dir = Path(__file__).parent / "assets" / "fonts"
         self.renderer = QuotlyRenderer(str(font_dir))
+
+        plugin_name = getattr(self, 'name', 'quotly')
+        self.db = QuotlyDatabase(plugin_name=plugin_name)
 
         logger.info("Quotlin 插件已加载")
 
@@ -221,10 +225,35 @@ class QuotlinPlugin(Star):
                     "reply_info": reply_info
                 })
 
-            # 渲染图片
             png_data = await self.renderer.arender(render_messages)
 
-            # 保存到临时文件
+            image_hash = compute_phash(png_data) or "unknown"
+
+            storage_messages = []
+            for i, msg_data_item in enumerate(messages_data):
+                sender = msg_data_item.get("sender", {})
+                user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
+                content, _ = self.parser.parse_message_content(msg_data_item.get("message", []))
+                time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
+                original_time = msg_data_item.get("time", 0)
+
+                storage_messages.append({
+                    "user_id": user_id,
+                    "nickname": nickname,
+                    "card": card,
+                    "title": title,
+                    "role": role,
+                    "content": content,
+                    "time_str": time_str,
+                    "original_time": original_time
+                })
+
+            try:
+                self.db.save_record(image_hash, png_data, group_id, storage_messages)
+                logger.debug(f"Quotly 记录已保存: hash={image_hash}")
+            except Exception as e:
+                logger.warning(f"保存 Quotly 记录失败: {e}")
+
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 f.write(png_data)
                 temp_path = f.name
@@ -243,7 +272,151 @@ class QuotlinPlugin(Star):
             logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染失败: {str(e)}")
 
+    @filter.command("qsearch")
+    async def search_command(self, event: AstrMessageEvent):
+        """
+        /qsearch <关键词> - 搜索本群包含关键词的 Quotly 记录
+        /qsearch -u <QQ号> - 搜索本群指定用户的记录
+        /qsearch -g <群号> - 搜索指定群的记录
+        /qsearch -a - 搜索所有群（全局搜索）
+        """
+        message_str = event.message_str.strip()
+        message_str = re.sub(r'^qsearch\s*', '', message_str)
+
+        if not message_str:
+            yield event.plain_result("用法: /qsearch <关键词>\n选项: -u <QQ号>, -g <群号>, -a (全局搜索)")
+            return
+
+        group_id_str = getattr(event.message_obj, 'group_id', None)
+        current_group_id = None
+        if group_id_str:
+            try:
+                current_group_id = int(group_id_str)
+            except (ValueError, TypeError):
+                pass
+
+        group_id = current_group_id
+        user_id = None
+        keyword = message_str
+
+        if re.search(r'-a\b', message_str):
+            group_id = None
+            keyword = re.sub(r'-a\b\s*', '', keyword)
+
+        user_match = re.search(r'-u\s*(\d+)', message_str)
+        if user_match:
+            try:
+                user_id = int(user_match.group(1))
+            except ValueError:
+                pass
+            keyword = re.sub(r'-u\s*\d+\s*', '', keyword)
+
+        group_match = re.search(r'-g\s*(\d+)', message_str)
+        if group_match:
+            try:
+                group_id = int(group_match.group(1))
+            except ValueError:
+                pass
+            keyword = re.sub(r'-g\s*\d+\s*', '', keyword)
+
+        keyword = keyword.strip()
+
+        try:
+            if user_id:
+                results = self.db.search_by_user(user_id, group_id, limit=5)
+            elif keyword:
+                results = self.db.search_by_keyword(keyword, group_id, limit=5)
+            else:
+                yield event.plain_result("请提供搜索关键词或使用 -u 指定用户")
+                return
+
+            if not results:
+                search_scope = "所有群" if group_id is None else f"本群"
+                yield event.plain_result(f"未在{search_scope}找到匹配的 Quotly 记录")
+                return
+
+            for result in results[:3]:
+                image_path = result.get('image_path')
+                if image_path and Path(image_path).exists():
+                    yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
+                else:
+                    yield event.plain_result(f"图片文件不存在: {image_path}")
+
+            if len(results) > 3:
+                yield event.plain_result(f"共找到 {len(results)} 条记录，仅显示前 3 条")
+
+        except Exception as e:
+            logger.error(f"搜索失败: {e}")
+            yield event.plain_result(f"搜索失败: {str(e)}")
+
+    @filter.command("qrandom")
+    async def random_command(self, event: AstrMessageEvent):
+        """
+        /qrandom - 随机获取本群一条 Quotly 记录
+        /qrandom -g <群号> - 随机获取指定群的记录
+        /qrandom -a - 随机获取所有群的记录
+        """
+        message_str = event.message_str.strip()
+        message_str = re.sub(r'^qrandom\s*', '', message_str)
+
+        group_id_str = getattr(event.message_obj, 'group_id', None)
+        current_group_id = None
+        if group_id_str:
+            try:
+                current_group_id = int(group_id_str)
+            except (ValueError, TypeError):
+                pass
+
+        group_id = current_group_id
+
+        if re.search(r'-a\b', message_str):
+            group_id = None
+
+        group_match = re.search(r'-g\s*(\d+)', message_str)
+        if group_match:
+            try:
+                group_id = int(group_match.group(1))
+            except ValueError:
+                pass
+
+        try:
+            results = self.db.get_random(group_id, limit=1)
+
+            if not results:
+                search_scope = "所有群" if group_id is None else "本群"
+                yield event.plain_result(f"暂无{search_scope} Quotly 记录")
+                return
+
+            result = results[0]
+            image_path = result.get('image_path')
+            if image_path and Path(image_path).exists():
+                yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
+            else:
+                yield event.plain_result(f"图片文件不存在: {image_path}")
+
+        except Exception as e:
+            logger.error(f"随机获取失败: {e}")
+            yield event.plain_result(f"随机获取失败: {str(e)}")
+
+    @filter.command("qstats")
+    async def stats_command(self, event: AstrMessageEvent):
+        """
+        /qstats - 查看 Quotly 记录统计
+        """
+        try:
+            stats = self.db.get_stats()
+            yield event.plain_result(
+                f"Quotly 统计:\n"
+                f"总记录数: {stats['total_records']}\n"
+                f"总消息数: {stats['total_messages']}\n"
+                f"群组数: {stats['total_groups']}"
+            )
+        except Exception as e:
+            logger.error(f"获取统计失败: {e}")
+            yield event.plain_result(f"获取统计失败: {str(e)}")
+
     async def terminate(self):
         """插件卸载时调用"""
         await self.renderer.cleanup()
+        self.db.close()
         logger.info("Quotlin 插件已卸载")
