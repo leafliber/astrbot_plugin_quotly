@@ -4,6 +4,7 @@ Quotly 数据库模块 - SQLite + FTS5 全文搜索
 
 import sqlite3
 import json
+import pathlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -22,7 +23,11 @@ class QuotlyDatabase:
     def __init__(self, plugin_name: str = "quotly", db_path: Optional[str] = None, images_dir: Optional[str] = None):
         if db_path is None or images_dir is None:
             if HAS_ASTRBOT_PATH:
-                data_dir = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
+                data_path = get_astrbot_data_path()
+                if isinstance(data_path, str):
+                    data_dir = pathlib.Path(data_path) / "plugin_data" / plugin_name
+                else:
+                    data_dir = data_path / "plugin_data" / plugin_name
             else:
                 plugin_dir = Path(__file__).parent.parent
                 data_dir = plugin_dir / "data"
