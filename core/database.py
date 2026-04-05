@@ -22,7 +22,7 @@ class QuotlyDatabase:
     def __init__(self, plugin_name: str = "quotly", db_path: Optional[str] = None, images_dir: Optional[str] = None):
         if db_path is None or images_dir is None:
             if HAS_ASTRBOT_PATH:
-                data_dir = get_astrbot_data_path() / "plugin_data" / plugin_name
+                data_dir = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
             else:
                 plugin_dir = Path(__file__).parent.parent
                 data_dir = plugin_dir / "data"
