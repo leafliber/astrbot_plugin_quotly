@@ -41,38 +41,68 @@ class QuotlinPlugin(Star):
         plugin_name = getattr(self, 'name', 'quotly')
         self.db = QuotlyDatabase(plugin_name=plugin_name)
 
+        self.q_trigger = ""
+        self.qsearch_trigger = ""
+        self.qrandom_trigger = ""
+        self._load_config()
+
         logger.info("Quotlin 插件已加载")
+
+    def _load_config(self):
+        config = self.context.get_config(self.name) or {}
+        trigger_words = config.get("trigger_words", {})
+        self.q_trigger = trigger_words.get("q_trigger", "").strip()
+        self.qsearch_trigger = trigger_words.get("qsearch_trigger", "").strip()
+        self.qrandom_trigger = trigger_words.get("qrandom_trigger", "").strip()
+        logger.info(f"触发词配置: q={self.q_trigger or '未设置'}, qsearch={self.qsearch_trigger or '未设置'}, qrandom={self.qrandom_trigger or '未设置'}")
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        message_str = event.message_str.strip()
+        
+        if self.q_trigger and message_str.startswith(self.q_trigger):
+            args = message_str[len(self.q_trigger):].strip()
+            async for result in self._handle_quote(event, args):
+                yield result
+            return
+        
+        if self.qsearch_trigger and message_str.startswith(self.qsearch_trigger):
+            args = message_str[len(self.qsearch_trigger):].strip()
+            async for result in self._handle_search(event, args):
+                yield result
+            return
+        
+        if self.qrandom_trigger and message_str == self.qrandom_trigger:
+            async for result in self._handle_random(event, ""):
+                yield result
+            return
 
     @filter.command("q")
     async def quote_command(self, event: AstrMessageEvent):
-        """
-        /q - Create a quote from replied message
-        /q <number> - Create quote from multiple messages (includes this message and previous <number>-1 messages)
-        """
-        # 设置 OneBot 客户端的 bot 对象
+        message_str = event.message_str.strip()
+        args = re.sub(r'^q\s*', '', message_str)
+        async for result in self._handle_quote(event, args):
+            yield result
+
+    async def _handle_quote(self, event: AstrMessageEvent, args: str):
         self.onebot.set_event(event)
 
-        # 解析回复消息 ID
         reply_id = self.parser.parse_reply(event)
 
         if reply_id is None:
             yield event.plain_result("请先回复一条消息，再使用 /q 指令")
             return
 
-        # 解析参数（消息数量）
-        message_str = event.message_str.strip()
-        count = 1  # 默认只获取 1 条
+        count = 1
+        logger.debug(f"解析消息: args='{args}'")
 
-        logger.debug(f"解析消息: message_str='{message_str}'")
-
-        # 匹配 q <数字> 格式（AstrBot 已去掉 / 前缀）
-        match = re.match(r'^q\s+(\d+)', message_str)
+        match = re.match(r'^(\d+)', args)
         if match:
             count = int(match.group(1))
             if count < 1:
                 count = 1
             if count > 20:
-                count = 20  # 限制最多 20 条
+                count = 20
 
         logger.debug(f"解析结果: count={count}")
 
@@ -274,16 +304,13 @@ class QuotlinPlugin(Star):
 
     @filter.command("qsearch")
     async def search_command(self, event: AstrMessageEvent):
-        """
-        /qsearch <关键词> - 搜索本群包含关键词的 Quotly 记录
-        /qsearch -u <QQ号> - 搜索本群指定用户的记录
-        /qsearch -g <群号> - 搜索指定群的记录
-        /qsearch -a - 搜索所有群（全局搜索）
-        """
         message_str = event.message_str.strip()
-        message_str = re.sub(r'^qsearch\s*', '', message_str)
+        args = re.sub(r'^qsearch\s*', '', message_str)
+        async for result in self._handle_search(event, args):
+            yield result
 
-        if not message_str:
+    async def _handle_search(self, event: AstrMessageEvent, args: str):
+        if not args:
             yield event.plain_result("用法: /qsearch <关键词>\n选项: -u <QQ号>, -g <群号>, -a (全局搜索)")
             return
 
@@ -297,13 +324,13 @@ class QuotlinPlugin(Star):
 
         group_id = current_group_id
         user_id = None
-        keyword = message_str
+        keyword = args
 
-        if re.search(r'-a\b', message_str):
+        if re.search(r'-a\b', args):
             group_id = None
             keyword = re.sub(r'-a\b\s*', '', keyword)
 
-        user_match = re.search(r'-u\s*(\d+)', message_str)
+        user_match = re.search(r'-u\s*(\d+)', args)
         if user_match:
             try:
                 user_id = int(user_match.group(1))
@@ -311,7 +338,7 @@ class QuotlinPlugin(Star):
                 pass
             keyword = re.sub(r'-u\s*\d+\s*', '', keyword)
 
-        group_match = re.search(r'-g\s*(\d+)', message_str)
+        group_match = re.search(r'-g\s*(\d+)', args)
         if group_match:
             try:
                 group_id = int(group_match.group(1))
@@ -351,14 +378,12 @@ class QuotlinPlugin(Star):
 
     @filter.command("qrandom")
     async def random_command(self, event: AstrMessageEvent):
-        """
-        /qrandom - 随机获取本群一条 Quotly 记录
-        /qrandom -g <群号> - 随机获取指定群的记录
-        /qrandom -a - 随机获取所有群的记录
-        """
         message_str = event.message_str.strip()
-        message_str = re.sub(r'^qrandom\s*', '', message_str)
+        args = re.sub(r'^qrandom\s*', '', message_str)
+        async for result in self._handle_random(event, args):
+            yield result
 
+    async def _handle_random(self, event: AstrMessageEvent, args: str):
         group_id_str = getattr(event.message_obj, 'group_id', None)
         current_group_id = None
         if group_id_str:
@@ -369,10 +394,10 @@ class QuotlinPlugin(Star):
 
         group_id = current_group_id
 
-        if re.search(r'-a\b', message_str):
+        if re.search(r'-a\b', args):
             group_id = None
 
-        group_match = re.search(r'-g\s*(\d+)', message_str)
+        group_match = re.search(r'-g\s*(\d+)', args)
         if group_match:
             try:
                 group_id = int(group_match.group(1))

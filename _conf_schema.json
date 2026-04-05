@@ -1,0 +1,27 @@
+{
+  "trigger_words": {
+    "description": "自定义触发词配置",
+    "type": "object",
+    "hint": "设置各功能的触发词，支持不带斜杠的直接触发",
+    "items": {
+      "q_trigger": {
+        "description": "引用消息触发词",
+        "type": "string",
+        "hint": "触发 /q 指令的关键词，留空则不启用无斜杠触发",
+        "default": ""
+      },
+      "qsearch_trigger": {
+        "description": "搜索触发词",
+        "type": "string",
+        "hint": "触发 /qsearch 指令的关键词，留空则不启用无斜杠触发",
+        "default": ""
+      },
+      "qrandom_trigger": {
+        "description": "随机触发词",
+        "type": "string",
+        "hint": "触发 /qrandom 指令的关键词，留空则不启用无斜杠触发",
+        "default": ""
+      }
+    }
+  }
+}
