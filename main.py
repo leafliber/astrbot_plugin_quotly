@@ -566,6 +566,127 @@ class QuotlinPlugin(Star):
             logger.error(f"获取统计失败: {e}")
             yield event.plain_result(f"获取统计失败: {str(e)}")
 
+    @filter.llm_tool(name="qsearch")
+    async def qsearch_tool(self, event: AstrMessageEvent, keyword: str, user_id: str = "", group_id: str = "", global_search: str = "false") -> MessageEventResult:
+        '''搜索语录记录。根据关键词搜索已保存的语录图片，支持按用户或群组筛选。
+
+        Args:
+            keyword(string): 搜索关键词，用于匹配语录内容、发送者昵称等
+            user_id(string): 可选，指定发送者的QQ号进行筛选
+            group_id(string): 可选，指定群号进行筛选
+            global_search(string): 可选，是否全局搜索（跨群），值为 "true" 或 "false"，默认 "false"
+        '''
+        try:
+            search_group_id = None
+            search_user_id = None
+            
+            if global_search.lower() != "true":
+                current_group_id_str = getattr(event.message_obj, 'group_id', None)
+                if current_group_id_str:
+                    try:
+                        search_group_id = int(current_group_id_str)
+                    except (ValueError, TypeError):
+                        pass
+            
+            if group_id.strip():
+                try:
+                    search_group_id = int(group_id.strip())
+                except ValueError:
+                    pass
+            
+            if user_id.strip():
+                try:
+                    search_user_id = int(user_id.strip())
+                except ValueError:
+                    pass
+
+            keyword = keyword.strip()
+            
+            if search_user_id:
+                results = self.db.search_by_user(search_user_id, search_group_id, limit=5)
+            elif keyword:
+                results = self.db.search_by_keyword(keyword, search_group_id, limit=5)
+            else:
+                yield event.plain_result("请提供搜索关键词")
+                return
+
+            if not results:
+                search_scope = "所有群" if search_group_id is None else "本群"
+                yield event.plain_result(f"未在{search_scope}找到匹配的语录记录")
+                return
+
+            result = results[0]
+            image_path = result.get('image_path')
+            if image_path and Path(image_path).exists():
+                messages = result.get('messages', [])
+                content_preview = ""
+                if messages:
+                    contents = [m.get('content', '') for m in messages[:3]]
+                    content_preview = " | ".join([c[:50] for c in contents if c])
+                
+                yield event.chain_result([
+                    Comp.Image.fromFileSystem(image_path),
+                    Comp.Plain(f"\n找到 {len(results)} 条记录，显示第1条。{content_preview}")
+                ])
+            else:
+                yield event.plain_result(f"图片文件不存在")
+
+        except Exception as e:
+            logger.error(f"搜索失败: {e}")
+            yield event.plain_result(f"搜索失败: {str(e)}")
+
+    @filter.llm_tool(name="qrandom")
+    async def qrandom_tool(self, event: AstrMessageEvent, group_id: str = "", global_random: str = "false") -> MessageEventResult:
+        '''随机获取一条语录记录。随机返回一条已保存的语录图片。
+
+        Args:
+            group_id(string): 可选，指定群号获取该群的语录
+            global_random(string): 可选，是否全局随机（跨群），值为 "true" 或 "false"，默认 "false"
+        '''
+        try:
+            search_group_id = None
+            
+            if global_random.lower() != "true":
+                current_group_id_str = getattr(event.message_obj, 'group_id', None)
+                if current_group_id_str:
+                    try:
+                        search_group_id = int(current_group_id_str)
+                    except (ValueError, TypeError):
+                        pass
+            
+            if group_id.strip():
+                try:
+                    search_group_id = int(group_id.strip())
+                except ValueError:
+                    pass
+
+            results = self.db.get_random(search_group_id, limit=1)
+
+            if not results:
+                search_scope = "所有群" if search_group_id is None else "本群"
+                yield event.plain_result(f"暂无{search_scope}语录记录")
+                return
+
+            result = results[0]
+            image_path = result.get('image_path')
+            if image_path and Path(image_path).exists():
+                messages = result.get('messages', [])
+                content_preview = ""
+                if messages:
+                    contents = [m.get('content', '') for m in messages[:3]]
+                    content_preview = " | ".join([c[:50] for c in contents if c])
+                
+                yield event.chain_result([
+                    Comp.Image.fromFileSystem(image_path),
+                    Comp.Plain(f"\n{content_preview}" if content_preview else "")
+                ])
+            else:
+                yield event.plain_result(f"图片文件不存在")
+
+        except Exception as e:
+            logger.error(f"随机获取失败: {e}")
+            yield event.plain_result(f"随机获取失败: {str(e)}")
+
     async def terminate(self):
         """插件卸载时调用"""
         await self.renderer.cleanup()
