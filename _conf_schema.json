@@ -48,5 +48,18 @@
         "default": false
       }
     }
+  },
+  "ocr_options": {
+    "description": "OCR识别选项",
+    "type": "object",
+    "hint": "配置图片文字识别功能，使用AstrBot配置的视觉模型对语录中的图片进行OCR识别",
+    "items": {
+      "enable_ocr": {
+        "description": "启用OCR识别",
+        "type": "bool",
+        "hint": "是否对语录中的图片进行OCR识别，识别结果将保存到元数据中供搜索使用",
+        "default": false
+      }
+    }
   }
 }

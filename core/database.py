@@ -77,6 +77,7 @@ class QuotlyDatabase:
                 title TEXT,
                 role TEXT,
                 content TEXT,
+                ocr_text TEXT,
                 time_str TEXT,
                 original_time INTEGER,
                 FOREIGN KEY (record_id) REFERENCES quotly_records(id) ON DELETE CASCADE
@@ -137,8 +138,8 @@ class QuotlyDatabase:
         for seq, msg in enumerate(messages):
             cursor.execute("""
                 INSERT INTO quotly_messages 
-                (record_id, seq, user_id, nickname, card, title, role, content, time_str, original_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (record_id, seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record_id,
                 seq,
@@ -148,6 +149,7 @@ class QuotlyDatabase:
                 msg.get('title'),
                 msg.get('role'),
                 msg.get('content'),
+                msg.get('ocr_text'),
                 msg.get('time_str'),
                 msg.get('original_time')
             ))
@@ -160,7 +162,7 @@ class QuotlyDatabase:
                 msg.get('nickname', ''),
                 msg.get('card', ''),
                 msg.get('title', ''),
-                msg.get('content', '')
+                msg.get('content', '') + (' ' + msg.get('ocr_text', '') if msg.get('ocr_text') else '')
             ))
 
         conn.commit()
@@ -280,7 +282,7 @@ class QuotlyDatabase:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT seq, user_id, nickname, card, title, role, content, time_str, original_time
+            SELECT seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time
             FROM quotly_messages
             WHERE record_id = ?
             ORDER BY seq

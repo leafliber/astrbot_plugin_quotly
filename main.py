@@ -62,6 +62,71 @@ class QuotlinPlugin(Star):
         self.show_date = render_options.get("show_date", True)
         logger.info(f"渲染选项: show_title={self.show_title}, show_time={self.show_time}, show_date={self.show_date}")
 
+        ocr_options = self.config.get("ocr_options", {})
+        self.enable_ocr = ocr_options.get("enable_ocr", False)
+        logger.info(f"OCR选项: enable_ocr={self.enable_ocr}")
+
+    def _extract_image_urls(self, message) -> list:
+        """
+        从消息中提取所有图片URL
+        
+        Args:
+            message: OneBot11 message 数组
+            
+        Returns:
+            图片URL列表
+        """
+        image_urls = []
+        if not message or not isinstance(message, (list, tuple)):
+            return image_urls
+            
+        for segment in message:
+            if isinstance(segment, dict):
+                seg_type = segment.get("type")
+                seg_data = segment.get("data", {})
+                if seg_type == "image":
+                    url = seg_data.get("url", "") or seg_data.get("file", "")
+                    if url:
+                        image_urls.append(url)
+                elif seg_type == "mface":
+                    url = seg_data.get("url", "")
+                    if url:
+                        image_urls.append(url)
+        
+        return image_urls
+
+    async def _ocr_image(self, image_url: str) -> str:
+        """
+        使用AstrBot的视觉模型对图片进行OCR识别
+        
+        Args:
+            image_url: 图片URL
+            
+        Returns:
+            OCR识别结果文本
+        """
+        try:
+            from astrbot.api.provider import ProviderRequest
+            
+            request = ProviderRequest(
+                prompt="请识别这张图片中的所有文字内容，只输出识别到的文字，不要添加任何解释或说明。如果图片中没有文字，请输出：[无文字]",
+                image_urls=[image_url]
+            )
+            
+            result = await self.context.call_llm(request)
+            
+            if result and result.completion_text:
+                ocr_text = result.completion_text.strip()
+                if ocr_text and ocr_text != "[无文字]":
+                    logger.debug(f"OCR识别成功: {ocr_text[:100]}...")
+                    return ocr_text
+            
+            return ""
+            
+        except Exception as e:
+            logger.warning(f"OCR识别失败: {e}")
+            return ""
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         message_str = event.message_str.strip()
@@ -100,6 +165,10 @@ class QuotlinPlugin(Star):
             return
 
         count = 1
+        show_title = self.show_title
+        show_time = self.show_time
+        show_date = self.show_date
+        
         logger.debug(f"解析消息: args='{args}'")
 
         match = re.match(r'^(\d+)', args)
@@ -110,7 +179,19 @@ class QuotlinPlugin(Star):
             if count > 20:
                 count = 20
 
-        logger.debug(f"解析结果: count={count}")
+        title_match = re.search(r'--title\s+([01])', args)
+        if title_match:
+            show_title = title_match.group(1) == '1'
+
+        time_match = re.search(r'--time\s+([01])', args)
+        if time_match:
+            show_time = time_match.group(1) == '1'
+
+        date_match = re.search(r'--date\s+([01])', args)
+        if date_match:
+            show_date = date_match.group(1) == '1'
+
+        logger.debug(f"解析结果: count={count}, show_title={show_title}, show_time={show_time}, show_date={show_date}")
 
         # 获取被回复消息的内容
         msg_data = await self.onebot.get_msg(reply_id)
@@ -206,7 +287,7 @@ class QuotlinPlugin(Star):
             for msg_data_item in messages_data:
                 msg_time = msg_data_item.get("time", 0)
                 
-                if self.show_date:
+                if show_date:
                     from datetime import datetime
                     try:
                         msg_datetime = datetime.fromtimestamp(msg_time)
@@ -283,9 +364,9 @@ class QuotlinPlugin(Star):
 
             png_data = await self.renderer.arender(
                 render_messages, 
-                show_title=self.show_title, 
-                show_time=self.show_time,
-                show_date=self.show_date
+                show_title=show_title, 
+                show_time=show_time,
+                show_date=show_date
             )
 
             image_hash = compute_phash(png_data) or "unknown"
@@ -298,6 +379,19 @@ class QuotlinPlugin(Star):
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
                 original_time = msg_data_item.get("time", 0)
 
+                ocr_text = ""
+                if self.enable_ocr:
+                    image_urls = self._extract_image_urls(msg_data_item.get("message", []))
+                    if image_urls:
+                        ocr_results = []
+                        for img_url in image_urls:
+                            ocr_result = await self._ocr_image(img_url)
+                            if ocr_result:
+                                ocr_results.append(ocr_result)
+                        if ocr_results:
+                            ocr_text = " ".join(ocr_results)
+                            logger.debug(f"消息 {i} OCR识别结果: {ocr_text[:100]}...")
+
                 storage_messages.append({
                     "user_id": user_id,
                     "nickname": nickname,
@@ -305,6 +399,7 @@ class QuotlinPlugin(Star):
                     "title": title,
                     "role": role,
                     "content": content,
+                    "ocr_text": ocr_text,
                     "time_str": time_str,
                     "original_time": original_time
                 })
