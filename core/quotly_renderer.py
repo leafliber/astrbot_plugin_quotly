@@ -73,7 +73,7 @@ class QuotlyRenderer:
                 self._playwright = None
                 logger.debug("浏览器实例已关闭")
 
-    async def arender(self, messages: List[dict]) -> bytes:
+    async def arender(self, messages: List[dict], show_title: bool = True, show_time: bool = True, show_date: bool = True) -> bytes:
         """
         异步渲染消息列表为 PNG 图片
 
@@ -86,12 +86,16 @@ class QuotlyRenderer:
                 - content: 消息内容
                 - time_str: 格式化的时间字符串
                 - avatar_url: 头像 URL（可选）
+                - type: 消息类型（可选，"date_separator" 表示日期分隔符）
+            show_title: 是否显示群头衔
+            show_time: 是否显示消息时间
+            show_date: 是否显示日期分隔符
 
         Returns:
             PNG 格式的字节数据
         """
         await self._ensure_browser()
-        html_content = self._build_html(messages)
+        html_content = self._build_html(messages, show_title=show_title, show_time=show_time, show_date=show_date)
         
         # 使用全局浏览器实例创建新页面
         page = await self._browser.new_page(viewport={"width": 800, "height": 100})
@@ -125,11 +129,18 @@ class QuotlyRenderer:
         """
         return asyncio.run(self.arender(messages))
 
-    def _build_html(self, messages: List[dict]) -> str:
+    def _build_html(self, messages: List[dict], show_title: bool = True, show_time: bool = True, show_date: bool = True) -> str:
         """构建 HTML 内容 - QQ 聊天气泡样式"""
         # 构建消息 HTML
         messages_html = ""
         for msg in messages:
+            # 检查是否为日期分隔符
+            if msg.get('type') == 'date_separator':
+                if show_date:
+                    date_str = self._escape_html(msg.get('date_str', ''))
+                    messages_html += f'<div class="date-separator"><span class="date-text">{date_str}</span></div>\n'
+                continue
+            
             nickname = self._escape_html(msg.get('nickname', '未知用户'))
             card = msg.get('card', '')
             title = msg.get('title', '')  # 群头衔
@@ -149,19 +160,17 @@ class QuotlyRenderer:
             header_html = ""
             
             # 根据 role 和 title 决定头衔显示
-            if role == "owner":
-                # 群主：显示"群主"，金色背景
-                header_html += '<span class="title-owner">群主</span>'
-            elif role == "admin":
-                # 管理员：显示专属头衔或"管理"，绿色背景
-                display_title = title if title else "管理"
-                header_html += f'<span class="title-admin">{display_title}</span>'
-            elif title:
-                # 普通成员有专属头衔：显示专属头衔，紫色背景
-                header_html += f'<span class="title-special">{title}</span>'
+            if show_title:
+                if role == "owner":
+                    header_html += '<span class="title-owner">群主</span>'
+                elif role == "admin":
+                    display_title = title if title else "管理"
+                    header_html += f'<span class="title-admin">{display_title}</span>'
+                elif title:
+                    header_html += f'<span class="title-special">{title}</span>'
             
             header_html += f'<span class="nickname">{card if card else nickname}</span>'
-            if time_str:
+            if show_time and time_str:
                 header_html += f'<span class="time">{time_str}</span>'
 
             # 回复预览 HTML
@@ -246,6 +255,22 @@ class QuotlyRenderer:
             padding: 30px;
         }}
 
+        .date-separator {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 40px 0 20px 0;
+            width: 100%;
+        }}
+
+        .date-separator:first-child {{
+            margin-top: 0;
+        }}
+
+        .date-text {{
+            color: #999;
+            font-size: 26px;
+        }}
 
         .message {{
             display: flex;
@@ -466,18 +491,18 @@ class QuotlyRenderer:
                 replyPreview.style.width = '';
             }}
             
-            // 取两者的最大值
-            const maxLineWidth = Math.max(maxContentWidth, replyWidth);
+            // 取两者的最大值，并向上取整
+            const maxLineWidth = Math.ceil(Math.max(maxContentWidth, replyWidth));
             
             // 气泡使用 box-sizing: border-box，padding 已包含在宽度内
-            // 只需添加少量余量避免字符边缘换行
-            const extraPadding = 5; // 额外余量
+            // 需要足够余量避免字体渲染精度问题导致换行
+            const extraPadding = 6;
             const minWidth = 100;
             const maxWidth = 1100;
             
             // 最终宽度 = 内容宽度 + 气泡左右 padding (40px) + 额外余量
             const finalWidth = Math.min(Math.max(maxLineWidth + 40 + extraPadding, minWidth), maxWidth);
-            bubble.style.width = finalWidth + 'px';
+            bubble.style.width = Math.ceil(finalWidth) + 'px';
         }});
     }}
     

@@ -16,7 +16,7 @@ if str(_plugin_dir) not in sys.path:
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+from astrbot.api import logger, AstrBotConfig
 import astrbot.api.message_components as Comp
 
 from core.onebot_client import OneBotClient
@@ -30,8 +30,9 @@ from utils.image_hash import compute_phash
 class QuotlinPlugin(Star):
     """引用消息渲染插件"""
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
         self.parser = MessageParser()
         self.onebot = OneBotClient()
 
@@ -49,12 +50,17 @@ class QuotlinPlugin(Star):
         logger.info("Quotlin 插件已加载")
 
     def _load_config(self):
-        config = self.context.get_config(self.name) or {}
-        trigger_words = config.get("trigger_words", {})
+        trigger_words = self.config.get("trigger_words", {})
         self.q_trigger = trigger_words.get("q_trigger", "").strip()
         self.qsearch_trigger = trigger_words.get("qsearch_trigger", "").strip()
         self.qrandom_trigger = trigger_words.get("qrandom_trigger", "").strip()
         logger.info(f"触发词配置: q={self.q_trigger or '未设置'}, qsearch={self.qsearch_trigger or '未设置'}, qrandom={self.qrandom_trigger or '未设置'}")
+
+        render_options = self.config.get("render_options", {})
+        self.show_title = render_options.get("show_title", True)
+        self.show_time = render_options.get("show_time", True)
+        self.show_date = render_options.get("show_date", True)
+        logger.info(f"渲染选项: show_title={self.show_title}, show_time={self.show_time}, show_date={self.show_date}")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -195,7 +201,27 @@ class QuotlinPlugin(Star):
         # 渲染消息列表
         try:
             render_messages = []
+            last_date = None
+            
             for msg_data_item in messages_data:
+                msg_time = msg_data_item.get("time", 0)
+                
+                if self.show_date:
+                    from datetime import datetime
+                    try:
+                        msg_datetime = datetime.fromtimestamp(msg_time)
+                        msg_date = msg_datetime.date()
+                        date_str = msg_datetime.strftime("%Y年%m月%d日")
+                        
+                        if last_date is None or msg_date != last_date:
+                            render_messages.append({
+                                "type": "date_separator",
+                                "date_str": date_str
+                            })
+                            last_date = msg_date
+                    except (ValueError, OSError):
+                        pass
+                
                 sender = msg_data_item.get("sender", {})
                 user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
                 
@@ -212,7 +238,7 @@ class QuotlinPlugin(Star):
                 else:
                     content, inner_reply_id = parse_result
                     
-                time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
+                time_str = self.parser.format_time_short(msg_time)
 
                 if not content:
                     content = "[仅包含媒体消息]"
@@ -255,7 +281,12 @@ class QuotlinPlugin(Star):
                     "reply_info": reply_info
                 })
 
-            png_data = await self.renderer.arender(render_messages)
+            png_data = await self.renderer.arender(
+                render_messages, 
+                show_title=self.show_title, 
+                show_time=self.show_time,
+                show_date=self.show_date
+            )
 
             image_hash = compute_phash(png_data) or "unknown"
 

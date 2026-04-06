@@ -23,5 +23,30 @@
         "default": ""
       }
     }
+  },
+  "render_options": {
+    "description": "渲染选项",
+    "type": "object",
+    "hint": "控制引用图片的渲染效果，修改后仅对新生成的图片生效，已保存的图片不会改变",
+    "items": {
+      "show_title": {
+        "description": "显示群头衔",
+        "type": "bool",
+        "hint": "是否在引用图片中显示群头衔（群主/管理员/专属头衔）",
+        "default": true
+      },
+      "show_time": {
+        "description": "显示消息时间",
+        "type": "bool",
+        "hint": "是否在引用图片中显示消息发送时间",
+        "default": true
+      },
+      "show_date": {
+        "description": "显示消息日期",
+        "type": "bool",
+        "hint": "是否在引用图片中显示消息日期分隔，当消息跨越不同日期时会在对应位置显示日期",
+        "default": true
+      }
+    }
   }
 }
