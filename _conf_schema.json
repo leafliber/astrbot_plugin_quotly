@@ -39,13 +39,13 @@
         "description": "显示消息时间",
         "type": "bool",
         "hint": "是否在引用图片中显示消息发送时间",
-        "default": true
+        "default": false
       },
       "show_date": {
         "description": "显示消息日期",
         "type": "bool",
         "hint": "是否在引用图片中显示消息日期分隔，当消息跨越不同日期时会在对应位置显示日期",
-        "default": true
+        "default": false
       }
     }
   }
