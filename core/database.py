@@ -108,6 +108,12 @@ class QuotlyDatabase:
             CREATE INDEX IF NOT EXISTS idx_messages_record_id ON quotly_messages(record_id)
         """)
 
+        cursor.execute("PRAGMA table_info(quotly_messages)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'ocr_text' not in columns:
+            logger.info("数据库迁移: 添加 ocr_text 列")
+            cursor.execute("ALTER TABLE quotly_messages ADD COLUMN ocr_text TEXT")
+
         conn.commit()
         logger.info(f"Quotly 数据库初始化完成: {self.db_path}")
 
