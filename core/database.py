@@ -309,6 +309,81 @@ class QuotlyDatabase:
             'total_groups': total_groups
         }
 
+    def find_by_hash(self, image_hash: str, threshold: int = 5) -> List[Dict[str, Any]]:
+        """
+        根据图片hash查找记录（支持模糊匹配）
+
+        Args:
+            image_hash: 要匹配的hash值
+            threshold: 汉明距离阈值，小于等于此值认为匹配
+
+        Returns:
+            匹配的记录列表
+        """
+        from utils.image_hash import hamming_distance
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, image_path, image_hash, group_id, created_at
+            FROM quotly_records
+        """)
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            record = dict(row)
+            stored_hash = record.get('image_hash', '')
+            if stored_hash:
+                distance = hamming_distance(image_hash, stored_hash)
+                if 0 <= distance <= threshold:
+                    record['hamming_distance'] = distance
+                    record['messages'] = self._get_messages_by_record_id(record['id'])
+                    results.append(record)
+
+        results.sort(key=lambda x: x.get('hamming_distance', 999))
+        return results
+
+    def delete_by_id(self, record_id: int) -> bool:
+        """
+        根据记录ID删除语录记录
+
+        Args:
+            record_id: 记录ID
+
+        Returns:
+            是否删除成功
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT image_path FROM quotly_records WHERE id = ?
+        """, (record_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return False
+
+        image_path = row[0]
+
+        cursor.execute("DELETE FROM quotly_search WHERE record_id = ?", (record_id,))
+        cursor.execute("DELETE FROM quotly_messages WHERE record_id = ?", (record_id,))
+        cursor.execute("DELETE FROM quotly_records WHERE id = ?", (record_id,))
+
+        conn.commit()
+
+        if image_path:
+            try:
+                Path(image_path).unlink(missing_ok=True)
+                logger.debug(f"已删除图片文件: {image_path}")
+            except Exception as e:
+                logger.warning(f"删除图片文件失败: {e}")
+
+        logger.info(f"已删除语录记录: record_id={record_id}")
+        return True
+
     def close(self):
         if self._conn:
             self._conn.close()

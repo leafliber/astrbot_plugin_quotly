@@ -127,6 +127,38 @@ class QuotlinPlugin(Star):
             logger.warning(f"OCR识别失败: {e}")
             return ""
 
+    async def _download_and_hash_image(self, image_url: str) -> str:
+        """
+        下载图片并计算hash
+
+        Args:
+            image_url: 图片URL
+
+        Returns:
+            图片hash值，失败返回空字符串
+        """
+        try:
+            import aiohttp
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        image_data = await resp.read()
+                        image_hash = compute_phash(image_data)
+                        if image_hash:
+                            logger.debug(f"图片hash计算成功: {image_hash}")
+                            return image_hash
+                        else:
+                            logger.warning("图片hash计算失败")
+                    else:
+                        logger.warning(f"下载图片失败: HTTP {resp.status}")
+            
+            return ""
+            
+        except Exception as e:
+            logger.warning(f"下载图片失败: {e}")
+            return ""
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         message_str = event.message_str.strip()
@@ -565,6 +597,66 @@ class QuotlinPlugin(Star):
         except Exception as e:
             logger.error(f"获取统计失败: {e}")
             yield event.plain_result(f"获取统计失败: {str(e)}")
+
+    @filter.command("qdel")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def delete_command(self, event: AstrMessageEvent):
+        """
+        /qdel - 删除语录记录（管理员专用）
+        需要回复机器人发送的语录图片消息
+        """
+        async for result in self._handle_delete(event):
+            yield result
+
+    async def _handle_delete(self, event: AstrMessageEvent):
+        self.onebot.set_event(event)
+
+        reply_id = self.parser.parse_reply(event)
+
+        if reply_id is None:
+            yield event.plain_result("请先回复一条语录图片消息，再使用 /qdel 指令")
+            return
+
+        try:
+            msg_data = await self.onebot.get_msg(reply_id)
+
+            if msg_data is None:
+                yield event.plain_result("无法获取消息内容，请确认消息是否存在")
+                return
+
+            message = msg_data.get("message", [])
+            image_urls = self._extract_image_urls(message)
+
+            if not image_urls:
+                yield event.plain_result("被回复的消息中没有图片，请回复语录图片消息")
+                return
+
+            deleted_count = 0
+            for image_url in image_urls:
+                image_hash = await self._download_and_hash_image(image_url)
+                
+                if not image_hash:
+                    logger.warning(f"无法计算图片hash: {image_url}")
+                    continue
+
+                matches = self.db.find_by_hash(image_hash, threshold=5)
+
+                for match in matches:
+                    record_id = match.get('id')
+                    if self.db.delete_by_id(record_id):
+                        deleted_count += 1
+                        logger.info(f"已删除语录: record_id={record_id}, hash={image_hash}")
+
+            if deleted_count > 0:
+                yield event.plain_result(f"已成功删除 {deleted_count} 条语录记录")
+            else:
+                yield event.plain_result("未找到匹配的语录记录")
+
+        except Exception as e:
+            import traceback
+            logger.error(f"删除语录失败: {e}")
+            logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
+            yield event.plain_result(f"删除失败: {str(e)}")
 
     @filter.llm_tool(name="qsearch")
     async def qsearch_tool(self, event: AstrMessageEvent, keyword: str, user_id: str = "", group_id: str = "", global_search: str = "false") -> MessageEventResult:
