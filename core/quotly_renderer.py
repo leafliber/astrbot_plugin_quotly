@@ -13,9 +13,8 @@ from astrbot.api import logger
 class QuotlyRenderer:
     """引用消息渲染器"""
     
-    _playwright = None
-    _browser = None
-    _lock = asyncio.Lock()
+    _global_lock = asyncio.Lock()
+    _instance_count = 0
 
     def __init__(self, font_dir: Optional[str] = None):
         """
@@ -44,34 +43,60 @@ class QuotlyRenderer:
         with open(font_path, 'rb') as f:
             font_data = f.read()
         self.font_base64 = base64.b64encode(font_data).decode('ascii')
+        
+        # 实例级别的浏览器管理
+        self._playwright = None
+        self._browser = None
+        self._lock = asyncio.Lock()
+        self._initialized = False
+        
+        # 实例计数
+        QuotlyRenderer._instance_count += 1
+        logger.debug(f"QuotlyRenderer 实例创建，当前实例数: {QuotlyRenderer._instance_count}")
 
     async def _ensure_browser(self):
         """确保浏览器实例已启动"""
         async with self._lock:
-            if self._browser is None:
+            if self._browser is None or not self._initialized:
                 logger.debug("启动浏览器实例...")
-                from playwright.async_api import async_playwright
-                self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(
-                    headless=True,
-                    args=[
-                        '--disable-gpu',
-                        '--disable-gpu-compositing',
-                        '--disable-software-rasterizer',
-                    ]
-                )
-                logger.debug("浏览器实例已启动")
+                try:
+                    from playwright.async_api import async_playwright
+                    self._playwright = await async_playwright().start()
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--disable-gpu',
+                            '--disable-gpu-compositing',
+                            '--disable-software-rasterizer',
+                        ]
+                    )
+                    self._initialized = True
+                    logger.debug("浏览器实例已启动")
+                except Exception as e:
+                    logger.error(f"启动浏览器实例失败: {e}")
+                    raise
 
     async def cleanup(self):
         """清理浏览器实例"""
         async with self._lock:
             if self._browser is not None:
                 logger.debug("关闭浏览器实例...")
-                await self._browser.close()
-                await self._playwright.stop()
-                self._browser = None
-                self._playwright = None
-                logger.debug("浏览器实例已关闭")
+                try:
+                    await self._browser.close()
+                    await self._playwright.stop()
+                    self._browser = None
+                    self._playwright = None
+                    self._initialized = False
+                    logger.debug("浏览器实例已关闭")
+                except Exception as e:
+                    logger.warning(f"关闭浏览器实例时出错: {e}")
+                    self._browser = None
+                    self._playwright = None
+                    self._initialized = False
+        
+        # 减少实例计数
+        QuotlyRenderer._instance_count = max(0, QuotlyRenderer._instance_count - 1)
+        logger.debug(f"QuotlyRenderer 实例清理，当前实例数: {QuotlyRenderer._instance_count}")
 
     async def arender(self, messages: List[dict], show_title: bool = True, show_time: bool = True, show_date: bool = True) -> bytes:
         """

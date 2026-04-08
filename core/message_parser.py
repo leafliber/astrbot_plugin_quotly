@@ -56,10 +56,12 @@ class MessageParser:
                 continue
 
             seg_type = None
-            if hasattr(segment, '__class__'):
-                seg_type = segment.__class__.__name__.lower()
-            elif hasattr(segment, 'type'):
+            # 优先检查 type 属性（适用于对象形式的消息段）
+            if hasattr(segment, 'type'):
                 seg_type = getattr(segment, 'type', None)
+            # 其次检查类名（适用于字典形式的消息段）
+            elif hasattr(segment, '__class__'):
+                seg_type = segment.__class__.__name__.lower()
 
             if seg_type == 'reply':
                 if hasattr(segment, 'id'):

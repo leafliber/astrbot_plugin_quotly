@@ -1,5 +1,5 @@
 """
-AstrBot Quotlin Plugin
+AstrBot Quotly Plugin
 复刻 quote-bot 项目，将 QQ 消息渲染为精美的引用图片
 """
 
@@ -27,7 +27,7 @@ from utils.image_hash import compute_phash
 
 
 @register("quotly", "Leafiber", "将消息渲染为精美的引用图片", "1.0.0")
-class QuotlinPlugin(Star):
+class QuotlyPlugin(Star):
     """引用消息渲染插件"""
 
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -47,7 +47,7 @@ class QuotlinPlugin(Star):
         self.qrandom_trigger = ""
         self._load_config()
 
-        logger.info("Quotlin 插件已加载")
+        logger.info("Quotly 插件已加载")
 
     def _load_config(self):
         trigger_words = self.config.get("trigger_words", {})
@@ -65,6 +65,10 @@ class QuotlinPlugin(Star):
         ocr_options = self.config.get("ocr_options", {})
         self.enable_ocr = ocr_options.get("enable_ocr", False)
         logger.info(f"OCR选项: enable_ocr={self.enable_ocr}")
+
+        permission_options = self.config.get("permission_options", {})
+        self.qdel_require_admin = permission_options.get("qdel_require_admin", True)
+        logger.info(f"权限选项: qdel_require_admin={self.qdel_require_admin}")
 
     def _extract_image_urls(self, message) -> list:
         """
@@ -403,6 +407,21 @@ class QuotlinPlugin(Star):
 
             image_hash = compute_phash(png_data) or "unknown"
 
+            duplicate_records = self.db.find_by_hash(image_hash, threshold=5)
+            if duplicate_records:
+                duplicate = duplicate_records[0]
+                distance = duplicate.get('hamming_distance', 0)
+                logger.info(f"检测到相似语录: hash={duplicate.get('image_hash')}, 汉明距离={distance}")
+                
+                duplicate_path = duplicate.get('image_path')
+                if duplicate_path and Path(duplicate_path).exists():
+                    logger.debug(f"返回已存在的相似语录: {duplicate_path}")
+                    yield event.chain_result([
+                        Comp.Image.fromFileSystem(duplicate_path),
+                        Comp.Plain(f"\n检测到相似语录（相似度: {100 - distance * 3}%），已返回已有记录")
+                    ])
+                    return
+
             storage_messages = []
             for i, msg_data_item in enumerate(messages_data):
                 sender = msg_data_item.get("sender", {})
@@ -599,12 +618,32 @@ class QuotlinPlugin(Star):
             yield event.plain_result(f"获取统计失败: {str(e)}")
 
     @filter.command("qdel")
-    @filter.permission_type(filter.PermissionType.ADMIN)
     async def delete_command(self, event: AstrMessageEvent):
         """
-        /qdel - 删除语录记录（管理员专用）
+        /qdel - 删除语录记录
         需要回复机器人发送的语录图片消息
+        可配置是否需要管理员权限
         """
+        if self.qdel_require_admin:
+            group_id = getattr(event.message_obj, 'group_id', None)
+            if group_id:
+                user_id = getattr(event.message_obj, 'sender', None)
+                if user_id:
+                    user_id = getattr(user_id, 'user_id', None)
+                
+                if user_id:
+                    try:
+                        member_info = await self.onebot.get_group_member_info(int(group_id), int(user_id))
+                        if member_info:
+                            role = member_info.get('role', 'member')
+                            if role not in ['owner', 'admin']:
+                                yield event.plain_result("删除语录需要管理员权限")
+                                return
+                    except Exception as e:
+                        logger.warning(f"检查用户权限失败: {e}")
+                        yield event.plain_result("无法验证权限，请稍后重试")
+                        return
+        
         async for result in self._handle_delete(event):
             yield result
 
@@ -783,4 +822,4 @@ class QuotlinPlugin(Star):
         """插件卸载时调用"""
         await self.renderer.cleanup()
         self.db.close()
-        logger.info("Quotlin 插件已卸载")
+        logger.info("Quotly 插件已卸载")

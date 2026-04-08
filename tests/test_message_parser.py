@@ -16,12 +16,21 @@ class MockSegment:
     def __init__(self, seg_type: str, data: dict):
         self.type = seg_type
         self.data = data
+        # 将 data 中的字段设置为属性，模拟真实消息段
+        for key, value in data.items():
+            setattr(self, key, value)
+
+
+class MockMessageObj:
+    """模拟消息对象"""
+    def __init__(self, segments):
+        self.message = segments
 
 
 class MockEvent:
     """模拟事件对象"""
-    def __init__(self, message_obj):
-        self.message_obj = message_obj
+    def __init__(self, segments):
+        self.message_obj = MockMessageObj(segments)
 
 
 class TestMessageParser:
@@ -77,15 +86,17 @@ class TestMessageParser:
             "user_id": 123456,
             "nickname": "测试用户",
             "card": "群名片",
-            "title": "专属头衔"
+            "title": "专属头衔",
+            "role": "admin"
         }
 
-        user_id, nickname, card, title = self.parser.parse_sender_info(sender)
+        user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
 
         assert user_id == 123456
         assert nickname == "测试用户"
         assert card == "群名片"
         assert title == "专属头衔"
+        assert role == "admin"
 
     def test_parse_sender_info_with_empty_card(self):
         """测试解析发送者信息（无群名片）"""
@@ -94,12 +105,13 @@ class TestMessageParser:
             "nickname": "测试用户"
         }
 
-        user_id, nickname, card, title = self.parser.parse_sender_info(sender)
+        user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
 
         assert user_id == 123456
         assert nickname == "测试用户"
         assert card == ""
         assert title == ""
+        assert role == "member"
 
     def test_parse_message_content_with_text(self):
         """测试解析纯文本消息"""
@@ -107,9 +119,10 @@ class TestMessageParser:
             {"type": "text", "data": {"text": "你好，世界"}}
         ]
 
-        result = self.parser.parse_message_content(message)
+        content, reply_id = self.parser.parse_message_content(message)
 
-        assert result == "你好，世界"
+        assert content == "你好，世界"
+        assert reply_id is None
 
     def test_parse_message_content_with_multiple_segments(self):
         """测试解析多消息段"""
@@ -120,18 +133,20 @@ class TestMessageParser:
             {"type": "image", "data": {"file": "xxx.jpg"}},
         ]
 
-        result = self.parser.parse_message_content(message)
+        content, reply_id = self.parser.parse_message_content(message)
 
-        assert "你好，" in result
-        assert "@某人" in result
-        assert "这是图片：" in result
-        assert "[图片]" in result
+        assert "你好，" in content
+        assert "@某人" in content
+        assert "这是图片：" in content
+        assert "[图片]" in content
+        assert reply_id is None
 
     def test_parse_message_content_with_empty_message(self):
         """测试解析空消息"""
-        result = self.parser.parse_message_content([])
+        content, reply_id = self.parser.parse_message_content([])
 
-        assert result == ""
+        assert content == ""
+        assert reply_id is None
 
     def test_format_time(self):
         """测试时间格式化"""

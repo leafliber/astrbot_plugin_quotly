@@ -38,12 +38,15 @@ class OneBotClient:
             消息详情字典，包含 time, message_type, message_id, sender, message 等字段
         """
         if not self.api:
+            logger.warning("API 对象未初始化，无法获取消息")
             return None
 
         try:
             result = await self.api.call_action('get_msg', message_id=message_id)
+            logger.debug(f"成功获取消息: message_id={message_id}")
             return result
         except Exception as e:
+            logger.error(f"获取消息失败: message_id={message_id}, 错误: {type(e).__name__}: {str(e)}")
             return None
 
     async def get_stranger_info(self, user_id: int) -> Optional[dict]:
@@ -57,12 +60,15 @@ class OneBotClient:
             用户信息字典
         """
         if not self.api:
+            logger.warning("API 对象未初始化，无法获取陌生人信息")
             return None
 
         try:
             result = await self.api.call_action('get_stranger_info', user_id=user_id)
+            logger.debug(f"成功获取陌生人信息: user_id={user_id}")
             return result
         except Exception as e:
+            logger.error(f"获取陌生人信息失败: user_id={user_id}, 错误: {type(e).__name__}: {str(e)}")
             return None
 
     def get_avatar_url(self, qq: int, size: int = 640) -> str:
@@ -91,6 +97,7 @@ class OneBotClient:
             包含 messages 数组的字典
         """
         if not self.api:
+            logger.warning("API 对象未初始化，无法获取历史消息")
             return None
 
         try:
@@ -101,13 +108,16 @@ class OneBotClient:
             if isinstance(result, dict):
                 # 如果返回的是完整响应，提取 data 字段
                 if 'data' in result:
+                    logger.debug(f"成功获取历史消息: group_id={group_id}, count={count}")
                     return result['data']
                 # 如果返回的直接就是 data
+                logger.debug(f"成功获取历史消息: group_id={group_id}, count={count}")
                 return result
             
+            logger.debug(f"成功获取历史消息: group_id={group_id}, count={count}")
             return result
         except Exception as e:
-            logger.debug(f"获取历史消息失败: {e}")
+            logger.error(f"获取历史消息失败: group_id={group_id}, message_seq={message_seq}, count={count}, 错误: {type(e).__name__}: {str(e)}")
             return None
 
     async def get_group_member_info(self, group_id: int, user_id: int) -> Optional[dict]:
@@ -122,10 +132,13 @@ class OneBotClient:
             群成员信息字典
         """
         if not self.api:
+            logger.warning("API 对象未初始化，无法获取群成员信息")
             return None
 
         try:
             result = await self.api.call_action('get_group_member_info', group_id=group_id, user_id=user_id)
+            logger.debug(f"成功获取群成员信息: group_id={group_id}, user_id={user_id}")
             return result
-        except Exception:
+        except Exception as e:
+            logger.error(f"获取群成员信息失败: group_id={group_id}, user_id={user_id}, 错误: {type(e).__name__}: {str(e)}")
             return None

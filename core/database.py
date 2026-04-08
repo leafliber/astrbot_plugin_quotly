@@ -186,23 +186,26 @@ class QuotlyDatabase:
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        base_query = """
+        fts_query = """
             SELECT DISTINCT r.id, r.image_path, r.image_hash, r.group_id, r.created_at
             FROM quotly_records r
-            JOIN quotly_messages m ON m.record_id = r.id
-            WHERE (m.nickname LIKE ? OR m.card LIKE ? OR m.title LIKE ? OR m.content LIKE ?)
+            WHERE r.id IN (
+                SELECT s.record_id FROM quotly_search s 
+                WHERE quotly_search MATCH ?
+            )
         """
-        like_pattern = f"%{keyword}%"
-        params = [like_pattern, like_pattern, like_pattern, like_pattern]
+        
+        fts_keyword = self._prepare_fts_keyword(keyword)
+        params = [fts_keyword]
 
         if group_id is not None:
-            base_query += " AND r.group_id = ?"
+            fts_query += " AND r.group_id = ?"
             params.append(group_id)
 
-        base_query += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+        fts_query += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
-        cursor.execute(base_query, params)
+        cursor.execute(fts_query, params)
         rows = cursor.fetchall()
 
         results = []
@@ -212,6 +215,37 @@ class QuotlyDatabase:
             results.append(record)
 
         return results
+
+    def _prepare_fts_keyword(self, keyword: str) -> str:
+        """
+        准备 FTS5 搜索关键词
+        处理特殊字符并添加通配符
+        
+        Args:
+            keyword: 原始搜索关键词
+            
+        Returns:
+            处理后的 FTS5 搜索字符串
+        """
+        keyword = keyword.strip()
+        
+        if not keyword:
+            return '""'
+        
+        fts_special_chars = ['"', "'", '*', '^', '(', ')', '{', '}', '[', ']']
+        for char in fts_special_chars:
+            keyword = keyword.replace(char, ' ')
+        
+        words = keyword.split()
+        if not words:
+            return '""'
+        
+        fts_words = []
+        for word in words:
+            if word:
+                fts_words.append(f'"{word}"*')
+        
+        return ' OR '.join(fts_words) if fts_words else '""'
 
     def search_by_user(
         self,
