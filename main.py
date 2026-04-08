@@ -165,6 +165,9 @@ class QuotlyPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
+        """
+        监听所有平台消息，处理自定义触发词
+        """
         message_str = event.message_str.strip()
         
         if self.q_trigger and message_str.startswith(self.q_trigger):
@@ -186,6 +189,10 @@ class QuotlyPlugin(Star):
 
     @filter.command("q")
     async def quote_command(self, event: AstrMessageEvent):
+        """
+        将消息渲染为精美的引用图片
+        用法: /q [数量] [--title 0|1] [--time 0|1] [--date 0|1]
+        """
         message_str = event.message_str.strip()
         args = re.sub(r'^q\s*', '', message_str)
         async for result in self._handle_quote(event, args):
@@ -481,6 +488,10 @@ class QuotlyPlugin(Star):
 
     @filter.command("qsearch")
     async def search_command(self, event: AstrMessageEvent):
+        """
+        搜索已保存的语录记录
+        用法: /qsearch <关键词> [-u <QQ号>] [-g <群号>] [-a]
+        """
         message_str = event.message_str.strip()
         args = re.sub(r'^qsearch\s*', '', message_str)
         async for result in self._handle_search(event, args):
@@ -555,6 +566,10 @@ class QuotlyPlugin(Star):
 
     @filter.command("qrandom")
     async def random_command(self, event: AstrMessageEvent):
+        """
+        随机获取一条语录记录
+        用法: /qrandom [-g <群号>] [-a]
+        """
         message_str = event.message_str.strip()
         args = re.sub(r'^qrandom\s*', '', message_str)
         async for result in self._handle_random(event, args):
@@ -603,7 +618,8 @@ class QuotlyPlugin(Star):
     @filter.command("qstats")
     async def stats_command(self, event: AstrMessageEvent):
         """
-        /qstats - 查看 Quotly 记录统计
+        查看语录统计信息
+        用法: /qstats
         """
         try:
             stats = self.db.get_stats()
@@ -620,9 +636,8 @@ class QuotlyPlugin(Star):
     @filter.command("qdel")
     async def delete_command(self, event: AstrMessageEvent):
         """
-        /qdel - 删除语录记录
-        需要回复机器人发送的语录图片消息
-        可配置是否需要管理员权限
+        删除语录记录
+        用法: /qdel（需回复机器人发送的语录图片）
         """
         if self.qdel_require_admin:
             group_id = getattr(event.message_obj, 'group_id', None)
