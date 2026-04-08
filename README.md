@@ -51,7 +51,6 @@ playwright install --with-deps chromium
 | 项目 | 最低要求 | 推荐配置 |
 |------|---------|---------|
 | **操作系统** | Linux / macOS / Windows | Linux (Ubuntu 20.04+) / macOS 11+ |
-| **架构** | x86_64 / arm64 | x86_64 |
 | **内存** | 512 MB 可用内存 | 1 GB+ 可用内存 |
 | **磁盘空间** | 300 MB（含浏览器） | 500 MB+ |
 
