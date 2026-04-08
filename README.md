@@ -2,7 +2,7 @@
 
 # ✨ Quotly - 语录图片生成器
 
-<img src="docs/logo.png" width="600" alt="Quotly"/>
+<img src="docs/logo.png" width="350" alt="Quotly"/>
 
 ![](https://count.getloli.com/get/@astrbot_plugin_quotly?theme=moebooru)
 
