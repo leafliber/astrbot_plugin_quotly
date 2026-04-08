@@ -3,7 +3,9 @@ AstrBot Quotly Plugin
 复刻 quote-bot 项目，将 QQ 消息渲染为精美的引用图片
 """
 
+import asyncio
 import os
+import random
 import re
 import sys
 import tempfile
@@ -423,6 +425,7 @@ class QuotlyPlugin(Star):
                 duplicate_path = duplicate.get('image_path')
                 if duplicate_path and Path(duplicate_path).exists():
                     logger.debug(f"返回已存在的相似语录: {duplicate_path}")
+                    await asyncio.sleep(random.uniform(0, 2))
                     yield event.chain_result([
                         Comp.Image.fromFileSystem(duplicate_path),
                         Comp.Plain(f"\n检测到相似语录（相似度: {100 - distance * 3}%），已返回已有记录")
@@ -473,7 +476,7 @@ class QuotlyPlugin(Star):
                 temp_path = f.name
 
             try:
-                # 发送图片
+                await asyncio.sleep(random.uniform(0, 2))
                 yield event.chain_result([Comp.Image.fromFileSystem(temp_path)])
             finally:
                 # 清理临时文件
@@ -490,7 +493,8 @@ class QuotlyPlugin(Star):
     async def search_command(self, event: AstrMessageEvent):
         """
         搜索已保存的语录记录
-        用法: /qsearch <关键词> [-u <QQ号>] [-g <群号>] [-a]
+        用法: /qsearch <关键词> [-u <QQ号>] [-g <群号>] [-a] [-n <数量>]
+        默认返回 1 张图片，可通过 -n 参数指定最大返回数量（1-5）
         """
         message_str = event.message_str.strip()
         args = re.sub(r'^qsearch\s*', '', message_str)
@@ -499,7 +503,7 @@ class QuotlyPlugin(Star):
 
     async def _handle_search(self, event: AstrMessageEvent, args: str):
         if not args:
-            yield event.plain_result("用法: /qsearch <关键词>\n选项: -u <QQ号>, -g <群号>, -a (全局搜索)")
+            yield event.plain_result("用法: /qsearch <关键词>\n选项: -u <QQ号>, -g <群号>, -a (全局搜索), -n <数量> (默认1，最大5)")
             return
 
         group_id_str = getattr(event.message_obj, 'group_id', None)
@@ -512,6 +516,7 @@ class QuotlyPlugin(Star):
 
         group_id = current_group_id
         user_id = None
+        max_count = 1
         keyword = args
 
         if re.search(r'-a\b', args):
@@ -534,13 +539,26 @@ class QuotlyPlugin(Star):
                 pass
             keyword = re.sub(r'-g\s*\d+\s*', '', keyword)
 
+        num_match = re.search(r'-n\s*(\d+)', args)
+        if num_match:
+            try:
+                max_count = int(num_match.group(1))
+                if max_count < 1:
+                    max_count = 1
+                elif max_count > 5:
+                    max_count = 5
+            except ValueError:
+                pass
+            keyword = re.sub(r'-n\s*\d+\s*', '', keyword)
+
         keyword = keyword.strip()
 
         try:
+            search_limit = 20
             if user_id:
-                results = self.db.search_by_user(user_id, group_id, limit=5)
+                results = self.db.search_by_user(user_id, group_id, limit=search_limit)
             elif keyword:
-                results = self.db.search_by_keyword(keyword, group_id, limit=5)
+                results = self.db.search_by_keyword(keyword, group_id, limit=search_limit)
             else:
                 yield event.plain_result("请提供搜索关键词或使用 -u 指定用户")
                 return
@@ -550,15 +568,19 @@ class QuotlyPlugin(Star):
                 yield event.plain_result(f"未在{search_scope}找到匹配的 Quotly 记录")
                 return
 
-            for result in results[:3]:
+            random.shuffle(results)
+            selected_results = results[:max_count]
+
+            for result in selected_results:
                 image_path = result.get('image_path')
                 if image_path and Path(image_path).exists():
+                    await asyncio.sleep(random.uniform(0, 2))
                     yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
                 else:
                     yield event.plain_result(f"图片文件不存在: {image_path}")
 
-            if len(results) > 3:
-                yield event.plain_result(f"共找到 {len(results)} 条记录，仅显示前 3 条")
+            if len(results) > max_count:
+                yield event.plain_result(f"共找到 {len(results)} 条记录，随机显示 {max_count} 条")
 
         except Exception as e:
             logger.error(f"搜索失败: {e}")
@@ -607,6 +629,7 @@ class QuotlyPlugin(Star):
             result = results[0]
             image_path = result.get('image_path')
             if image_path and Path(image_path).exists():
+                await asyncio.sleep(random.uniform(0, 2))
                 yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
             else:
                 yield event.plain_result(f"图片文件不存在: {image_path}")
@@ -770,6 +793,7 @@ class QuotlyPlugin(Star):
                     contents = [m.get('content', '') for m in messages[:3]]
                     content_preview = " | ".join([c[:50] for c in contents if c])
                 
+                await asyncio.sleep(random.uniform(0, 2))
                 yield event.chain_result([
                     Comp.Image.fromFileSystem(image_path),
                     Comp.Plain(f"\n找到 {len(results)} 条记录，显示第1条。{content_preview}")
@@ -822,6 +846,7 @@ class QuotlyPlugin(Star):
                     contents = [m.get('content', '') for m in messages[:3]]
                     content_preview = " | ".join([c[:50] for c in contents if c])
                 
+                await asyncio.sleep(random.uniform(0, 2))
                 yield event.chain_result([
                     Comp.Image.fromFileSystem(image_path),
                     Comp.Plain(f"\n{content_preview}" if content_preview else "")
