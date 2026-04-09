@@ -41,6 +41,8 @@ class MessageParser:
             被回复的消息 ID，如果没有则返回 None
         """
         if not hasattr(event, 'message_obj') or not event.message_obj:
+            from astrbot.api import logger
+            logger.debug("parse_reply: event.message_obj 不存在")
             return None
 
         message_segments = None
@@ -49,29 +51,57 @@ class MessageParser:
             message_segments = event.message_obj.message
 
         if not message_segments:
+            from astrbot.api import logger
+            logger.debug("parse_reply: message_segments 为空")
             return None
+
+        from astrbot.api import logger
+        logger.debug(f"parse_reply: 找到 {len(message_segments)} 个消息段")
 
         for segment in message_segments:
             if isinstance(segment, str):
                 continue
 
+            # 打印消息段结构用于调试
+            logger.debug(f"parse_reply: segment 类型={type(segment).__name__}, 内容={segment if len(str(segment)) < 200 else str(segment)[:200]+'...'}")
+
             seg_type = None
             # 检查 type 属性（适用于对象形式的消息段）
             if hasattr(segment, 'type'):
                 seg_type = getattr(segment, 'type', None)
+                logger.debug(f"parse_reply: segment.type = {seg_type}")
             # 如果 type 属性未找到有效值，检查类名（适用于字典形式的消息段）
             if not seg_type and hasattr(segment, '__class__'):
                 seg_type = segment.__class__.__name__.lower()
+                logger.debug(f"parse_reply: segment 类名 = {seg_type}")
 
             if seg_type == 'reply':
+                logger.debug(f"parse_reply: 找到 reply 段")
+                # 尝试多种方式获取 id
+                msg_id = None
+
+                # 方式1: segment.id
                 if hasattr(segment, 'id'):
                     msg_id = getattr(segment, 'id', None)
-                    if msg_id is not None:
-                        try:
-                            return int(msg_id)
-                        except (ValueError, TypeError):
-                            pass
+                    logger.debug(f"parse_reply: segment.id = {msg_id}")
 
+                # 方式2: segment.data.id (对象形式)
+                if msg_id is None and hasattr(segment, 'data'):
+                    data = getattr(segment, 'data', None)
+                    if data:
+                        if isinstance(data, dict):
+                            msg_id = data.get('id')
+                        elif hasattr(data, 'id'):
+                            msg_id = getattr(data, 'id', None)
+                        logger.debug(f"parse_reply: segment.data.id = {msg_id}")
+
+                if msg_id is not None:
+                    try:
+                        return int(msg_id)
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"parse_reply: 转换 id 失败: {e}")
+
+        logger.debug("parse_reply: 未找到有效的 reply 消息段")
         return None
 
     def parse_sender_info(self, sender) -> tuple[int, str, str, str, str]:
