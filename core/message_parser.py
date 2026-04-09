@@ -30,6 +30,29 @@ class ParsedMessage:
 class MessageParser:
     """消息解析器"""
 
+    def _get_segment_type(self, segment) -> Optional[str]:
+        """
+        获取消息段类型
+
+        Args:
+            segment: 消息段对象
+
+        Returns:
+            消息段类型字符串（小写）
+        """
+        if not hasattr(segment, 'type'):
+            return segment.__class__.__name__.lower() if hasattr(segment, '__class__') else None
+
+        type_attr = segment.type
+        # 处理枚举类型（如 AstrBot 的 ComponentType.Reply）
+        if hasattr(type_attr, 'name'):
+            return type_attr.name.lower()
+        if hasattr(type_attr, 'value'):
+            return str(type_attr.value).lower()
+        if type_attr is not None:
+            return str(type_attr).lower()
+        return None
+
     def parse_reply(self, event) -> Optional[int]:
         """
         从事件中解析被回复的消息 ID
@@ -41,67 +64,28 @@ class MessageParser:
             被回复的消息 ID，如果没有则返回 None
         """
         if not hasattr(event, 'message_obj') or not event.message_obj:
-            from astrbot.api import logger
-            logger.debug("parse_reply: event.message_obj 不存在")
             return None
 
-        message_segments = None
-
-        if hasattr(event.message_obj, 'message'):
-            message_segments = event.message_obj.message
-
+        message_segments = getattr(event.message_obj, 'message', None)
         if not message_segments:
-            from astrbot.api import logger
-            logger.debug("parse_reply: message_segments 为空")
             return None
-
-        from astrbot.api import logger
-        logger.debug(f"parse_reply: 找到 {len(message_segments)} 个消息段")
 
         for segment in message_segments:
             if isinstance(segment, str):
                 continue
 
-            # 打印消息段结构用于调试
-            logger.debug(f"parse_reply: segment 类型={type(segment).__name__}, 内容={segment if len(str(segment)) < 200 else str(segment)[:200]+'...'}")
+            seg_type = self._get_segment_type(segment)
+            if seg_type != 'reply':
+                continue
 
-            seg_type = None
-            # 检查 type 属性（适用于对象形式的消息段）
-            if hasattr(segment, 'type'):
-                seg_type = getattr(segment, 'type', None)
-                logger.debug(f"parse_reply: segment.type = {seg_type}")
-            # 如果 type 属性未找到有效值，检查类名（适用于字典形式的消息段）
-            if not seg_type and hasattr(segment, '__class__'):
-                seg_type = segment.__class__.__name__.lower()
-                logger.debug(f"parse_reply: segment 类名 = {seg_type}")
+            # 尝试获取消息 ID
+            msg_id = getattr(segment, 'id', None)
+            if msg_id is not None:
+                try:
+                    return int(msg_id)
+                except (ValueError, TypeError):
+                    pass
 
-            if seg_type == 'reply':
-                logger.debug(f"parse_reply: 找到 reply 段")
-                # 尝试多种方式获取 id
-                msg_id = None
-
-                # 方式1: segment.id
-                if hasattr(segment, 'id'):
-                    msg_id = getattr(segment, 'id', None)
-                    logger.debug(f"parse_reply: segment.id = {msg_id}")
-
-                # 方式2: segment.data.id (对象形式)
-                if msg_id is None and hasattr(segment, 'data'):
-                    data = getattr(segment, 'data', None)
-                    if data:
-                        if isinstance(data, dict):
-                            msg_id = data.get('id')
-                        elif hasattr(data, 'id'):
-                            msg_id = getattr(data, 'id', None)
-                        logger.debug(f"parse_reply: segment.data.id = {msg_id}")
-
-                if msg_id is not None:
-                    try:
-                        return int(msg_id)
-                    except (ValueError, TypeError) as e:
-                        logger.debug(f"parse_reply: 转换 id 失败: {e}")
-
-        logger.debug("parse_reply: 未找到有效的 reply 消息段")
         return None
 
     def parse_sender_info(self, sender) -> tuple[int, str, str, str, str]:
@@ -113,20 +97,16 @@ class MessageParser:
 
         Returns:
             (user_id, nickname, card, title, role)
-            - user_id: QQ号
-            - nickname: 昵称
-            - card: 群名片
-            - title: 专属头衔
-            - role: 角色 (owner/admin/member)
         """
         if not sender or not isinstance(sender, dict):
             return 0, "", "", "", "member"
-        user_id = sender.get("user_id", 0)
-        nickname = sender.get("nickname", "")
-        card = sender.get("card", "")
-        title = sender.get("title", "")
-        role = sender.get("role", "member")
-        return user_id, nickname, card, title, role
+        return (
+            sender.get("user_id", 0),
+            sender.get("nickname", ""),
+            sender.get("card", ""),
+            sender.get("title", ""),
+            sender.get("role", "member")
+        )
 
     def parse_message_content(self, message) -> tuple[str, Optional[int]]:
         """
@@ -137,94 +117,81 @@ class MessageParser:
 
         Returns:
             (纯文本内容, 回复消息ID)
-            - 纯文本内容：图片使用 [图片](url) 格式
-            - 回复消息ID：如果消息包含回复，则返回被回复的消息ID，否则返回 None
         """
         if not message:
             return "", None
 
         if not isinstance(message, (list, tuple)):
-            if isinstance(message, str):
-                return message, None
-            return str(message), None
+            return message if isinstance(message, str) else str(message), None
 
         text_parts = []
         reply_id = None
-        
+
         for segment in message:
             if isinstance(segment, dict):
-                seg_type = segment.get("type")
-                seg_data = segment.get("data", {})
-                if seg_type == "text":
-                    text_parts.append(seg_data.get("text", ""))
-                elif seg_type == "image":
-                    # 使用 [图片](url) 格式，以便后续解析
-                    image_url = seg_data.get("url", "") or seg_data.get("file", "")
-                    if image_url:
-                        text_parts.append(f"[图片]({image_url})")
-                    else:
-                        text_parts.append("[图片]")
-                elif seg_type == "face":
-                    # QQ 表情，使用 [表情] 格式
-                    face_id = seg_data.get("id", "")
-                    face_name = seg_data.get("name", "") or f"表情{face_id}"
-                    text_parts.append(f"[{face_name}]")
-                elif seg_type == "mface":
-                    # 魔法表情/大表情，尝试获取 URL
-                    mface_url = seg_data.get("url", "")
-                    mface_summary = seg_data.get("summary", "表情")
-                    if mface_url:
-                        text_parts.append(f"[图片]({mface_url})")
-                    else:
-                        text_parts.append(f"[{mface_summary}]")
-                elif seg_type == "record":
-                    text_parts.append("[语音]")
-                elif seg_type == "video":
-                    text_parts.append("[视频]")
-                elif seg_type == "at":
-                    text_parts.append(f"@{seg_data.get('name', '')}")
-                elif seg_type == "reply":
-                    # 提取回复消息 ID
-                    reply_id = seg_data.get("id")
-                    if reply_id is not None:
+                self._parse_dict_segment(segment, text_parts, reply_id)
+                # 更新 reply_id
+                if segment.get("type") == "reply":
+                    rid = segment.get("data", {}).get("id")
+                    if rid is not None:
                         try:
-                            reply_id = int(reply_id)
+                            reply_id = int(rid)
                         except (ValueError, TypeError):
-                            reply_id = None
+                            pass
             elif hasattr(segment, 'type'):
-                if segment.type == "text":
-                    text_parts.append(getattr(segment.data, 'get', lambda x: "")("text"))
-                elif segment.type == "image":
-                    # 尝试获取图片 URL
-                    if hasattr(segment, 'data'):
-                        image_url = ""
-                        if isinstance(segment.data, dict):
-                            image_url = segment.data.get("url", "") or segment.data.get("file", "")
-                        text_parts.append(f"[图片]({image_url})" if image_url else "[图片]")
-                    else:
-                        text_parts.append("[图片]")
-                elif segment.type == "reply":
-                    # 提取回复消息 ID
-                    if hasattr(segment, 'id'):
-                        reply_id = getattr(segment, 'id', None)
-                        if reply_id is not None:
-                            try:
-                                reply_id = int(reply_id)
-                            except (ValueError, TypeError):
-                                reply_id = None
+                self._parse_obj_segment(segment, text_parts, reply_id)
+                # 更新 reply_id
+                seg_type = self._get_segment_type(segment)
+                if seg_type == 'reply':
+                    rid = getattr(segment, 'id', None)
+                    if rid is not None:
+                        try:
+                            reply_id = int(rid)
+                        except (ValueError, TypeError):
+                            pass
 
         return "".join(text_parts).strip(), reply_id
 
+    def _parse_dict_segment(self, segment: dict, text_parts: list, reply_id):
+        """解析字典形式的消息段"""
+        seg_type = segment.get("type")
+        seg_data = segment.get("data", {})
+
+        if seg_type == "text":
+            text_parts.append(seg_data.get("text", ""))
+        elif seg_type == "image":
+            url = seg_data.get("url", "") or seg_data.get("file", "")
+            text_parts.append(f"[图片]({url})" if url else "[图片]")
+        elif seg_type == "face":
+            name = seg_data.get("name", "") or f"表情{seg_data.get('id', '')}"
+            text_parts.append(f"[{name}]")
+        elif seg_type == "mface":
+            url = seg_data.get("url", "")
+            text_parts.append(f"[图片]({url})" if url else f"[{seg_data.get('summary', '表情')}]")
+        elif seg_type == "record":
+            text_parts.append("[语音]")
+        elif seg_type == "video":
+            text_parts.append("[视频]")
+        elif seg_type == "at":
+            text_parts.append(f"@{seg_data.get('name', '')}")
+
+    def _parse_obj_segment(self, segment, text_parts: list, reply_id):
+        """解析对象形式的消息段"""
+        seg_type = self._get_segment_type(segment)
+
+        if seg_type == "text":
+            data = getattr(segment, 'data', {})
+            text_parts.append(data.get("text", "") if isinstance(data, dict) else "")
+        elif seg_type == "image":
+            data = getattr(segment, 'data', {})
+            if isinstance(data, dict):
+                url = data.get("url", "") or data.get("file", "")
+                text_parts.append(f"[图片]({url})" if url else "[图片]")
+            else:
+                text_parts.append("[图片]")
+
     def format_time(self, timestamp: int) -> str:
-        """
-        格式化时间戳为可读字符串
-
-        Args:
-            timestamp: Unix 时间戳
-
-        Returns:
-            格式化后的时间字符串，如 "2024-01-01 12:00:00"
-        """
+        """格式化时间戳为可读字符串"""
         if not timestamp:
             return ""
         try:
@@ -233,15 +200,7 @@ class MessageParser:
             return ""
 
     def format_time_short(self, timestamp: int) -> str:
-        """
-        格式化时间戳为短格式
-
-        Args:
-            timestamp: Unix 时间戳
-
-        Returns:
-            短格式时间字符串，如 "12:00"
-        """
+        """格式化时间戳为短格式"""
         if not timestamp:
             return ""
         try:

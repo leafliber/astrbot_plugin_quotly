@@ -1,9 +1,10 @@
 """
-Quotly 数据库模块 - SQLite + FTS5 全文搜索
+Quotly 数据库模块 - SQLite + FTS5 全文搜索（异步版本）
+使用 aiosqlite 实现非阻塞数据库操作
 """
 
-import sqlite3
-import json
+import asyncio
+import aiosqlite
 import pathlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -18,55 +19,55 @@ except ImportError:
 
 
 class QuotlyDatabase:
-    """Quotly 数据库管理类"""
+    """Quotly 数据库管理类（异步版本）"""
 
     def __init__(self, plugin_name: str = "quotly", db_path: Optional[str] = None, images_dir: Optional[str] = None):
         if db_path is None or images_dir is None:
             if HAS_ASTRBOT_PATH:
                 data_path = get_astrbot_data_path()
-                if isinstance(data_path, str):
-                    data_dir = pathlib.Path(data_path) / "plugin_data" / plugin_name
-                else:
-                    data_dir = data_path / "plugin_data" / plugin_name
+                data_dir = (pathlib.Path(data_path) if isinstance(data_path, str)
+                           else data_path) / "plugin_data" / plugin_name
             else:
-                plugin_dir = Path(__file__).parent.parent
-                data_dir = plugin_dir / "data"
-            
+                data_dir = Path(__file__).parent.parent / "data"
+
             data_dir.mkdir(parents=True, exist_ok=True)
 
             if db_path is None:
                 db_path = str(data_dir / "quotly.db")
-
             if images_dir is None:
                 images_dir = str(data_dir / "images")
                 Path(images_dir).mkdir(parents=True, exist_ok=True)
 
         self.db_path = db_path
         self.images_dir = Path(images_dir)
-        self._conn: Optional[sqlite3.Connection] = None
-        self._init_db()
+        self._conn: Optional[aiosqlite.Connection] = None
+        self._lock = asyncio.Lock()
+        self._initialized = False
 
-    def _get_conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
-            self._conn.row_factory = sqlite3.Row
+    async def _get_conn(self) -> aiosqlite.Connection:
+        """获取数据库连接"""
+        async with self._lock:
+            if self._conn is None:
+                self._conn = await aiosqlite.connect(self.db_path)
+                self._conn.row_factory = aiosqlite.Row
+                if not self._initialized:
+                    await self._init_db()
+                    self._initialized = True
         return self._conn
 
-    def _init_db(self):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+    async def _init_db(self):
+        """初始化数据库表结构"""
+        conn = self._conn
 
-        cursor.execute("""
+        await conn.executescript("""
             CREATE TABLE IF NOT EXISTS quotly_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 image_hash TEXT NOT NULL,
                 image_path TEXT NOT NULL,
                 group_id INTEGER,
                 created_at INTEGER NOT NULL
-            )
-        """)
+            );
 
-        cursor.execute("""
             CREATE TABLE IF NOT EXISTS quotly_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 record_id INTEGER NOT NULL,
@@ -81,10 +82,8 @@ class QuotlyDatabase:
                 time_str TEXT,
                 original_time INTEGER,
                 FOREIGN KEY (record_id) REFERENCES quotly_records(id) ON DELETE CASCADE
-            )
-        """)
+            );
 
-        cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS quotly_search USING fts5(
                 record_id UNINDEXED,
                 nickname,
@@ -92,90 +91,68 @@ class QuotlyDatabase:
                 title,
                 content,
                 tokenize='unicode61'
-            )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_records_group_id ON quotly_records(group_id);
+            CREATE INDEX IF NOT EXISTS idx_records_created_at ON quotly_records(created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_user_id ON quotly_messages(user_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_record_id ON quotly_messages(record_id);
         """)
 
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_records_group_id ON quotly_records(group_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_records_created_at ON quotly_records(created_at)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_user_id ON quotly_messages(user_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_record_id ON quotly_messages(record_id)
-        """)
-
-        cursor.execute("PRAGMA table_info(quotly_messages)")
-        columns = [col[1] for col in cursor.fetchall()]
+        # 检查并添加 ocr_text 列
+        cursor = await conn.execute("PRAGMA table_info(quotly_messages)")
+        columns = [col[1] for col in await cursor.fetchall()]
         if 'ocr_text' not in columns:
             logger.info("数据库迁移: 添加 ocr_text 列")
-            cursor.execute("ALTER TABLE quotly_messages ADD COLUMN ocr_text TEXT")
+            await conn.execute("ALTER TABLE quotly_messages ADD COLUMN ocr_text TEXT")
 
-        conn.commit()
+        await conn.commit()
         logger.info(f"Quotly 数据库初始化完成: {self.db_path}")
 
-    def save_record(
+    async def save_record(
         self,
         image_hash: str,
         image_data: bytes,
         group_id: Optional[int],
         messages: List[Dict[str, Any]]
     ) -> int:
-        conn = self._get_conn()
-        cursor = conn.cursor()
-
+        """保存语录记录"""
+        conn = await self._get_conn()
         timestamp = int(datetime.now().timestamp())
 
-        image_filename = f"{image_hash}_{timestamp}.png"
-        image_path = self.images_dir / image_filename
-        with open(image_path, 'wb') as f:
-            f.write(image_data)
+        # 保存图片文件
+        image_path = self.images_dir / f"{image_hash}_{timestamp}.png"
+        image_path.write_bytes(image_data)
 
-        cursor.execute("""
-            INSERT INTO quotly_records (image_hash, image_path, group_id, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (image_hash, str(image_path), group_id, timestamp))
+        # 插入记录
+        async with self._lock:
+            cursor = await conn.execute(
+                "INSERT INTO quotly_records (image_hash, image_path, group_id, created_at) VALUES (?, ?, ?, ?)",
+                (image_hash, str(image_path), group_id, timestamp)
+            )
+            record_id = cursor.lastrowid
 
-        record_id = cursor.lastrowid
+            for seq, msg in enumerate(messages):
+                await conn.execute(
+                    """INSERT INTO quotly_messages
+                    (record_id, seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (record_id, seq, msg.get('user_id'), msg.get('nickname'), msg.get('card'),
+                     msg.get('title'), msg.get('role'), msg.get('content'), msg.get('ocr_text'),
+                     msg.get('time_str'), msg.get('original_time'))
+                )
+                await conn.execute(
+                    "INSERT INTO quotly_search (record_id, nickname, card, title, content) VALUES (?, ?, ?, ?, ?)",
+                    (record_id, msg.get('nickname', ''), msg.get('card', ''), msg.get('title', ''),
+                     msg.get('content', '') + (' ' + msg.get('ocr_text', '') if msg.get('ocr_text') else ''))
+                )
 
-        for seq, msg in enumerate(messages):
-            cursor.execute("""
-                INSERT INTO quotly_messages 
-                (record_id, seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record_id,
-                seq,
-                msg.get('user_id'),
-                msg.get('nickname'),
-                msg.get('card'),
-                msg.get('title'),
-                msg.get('role'),
-                msg.get('content'),
-                msg.get('ocr_text'),
-                msg.get('time_str'),
-                msg.get('original_time')
-            ))
+            await conn.commit()
 
-            cursor.execute("""
-                INSERT INTO quotly_search (record_id, nickname, card, title, content)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                record_id,
-                msg.get('nickname', ''),
-                msg.get('card', ''),
-                msg.get('title', ''),
-                msg.get('content', '') + (' ' + msg.get('ocr_text', '') if msg.get('ocr_text') else '')
-            ))
-
-        conn.commit()
-        logger.debug(f"保存 Quotly 记录: record_id={record_id}, hash={image_hash}, messages={len(messages)}")
+        logger.debug(f"保存 Quotly 记录: record_id={record_id}, hash={image_hash}")
         return record_id
 
-    def search_by_keyword(
+    async def search_by_keyword(
         self,
         keyword: str,
         group_id: Optional[int] = None,
@@ -183,249 +160,169 @@ class QuotlyDatabase:
         limit: int = 10,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        """根据关键词搜索语录"""
+        conn = await self._get_conn()
 
-        fts_query = """
+        query = """
             SELECT DISTINCT r.id, r.image_path, r.image_hash, r.group_id, r.created_at
             FROM quotly_records r
-            WHERE r.id IN (
-                SELECT s.record_id FROM quotly_search s 
-                WHERE quotly_search MATCH ?
-            )
+            WHERE r.id IN (SELECT s.record_id FROM quotly_search s WHERE quotly_search MATCH ?)
         """
-        
-        fts_keyword = self._prepare_fts_keyword(keyword)
-        params = [fts_keyword]
+        params = [self._prepare_fts_keyword(keyword)]
 
         if group_id is not None:
-            fts_query += " AND r.group_id = ?"
+            query += " AND r.group_id = ?"
             params.append(group_id)
 
-        fts_query += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+        query += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
-        cursor.execute(fts_query, params)
-        rows = cursor.fetchall()
+        cursor = await conn.execute(query, params)
+        rows = await cursor.fetchall()
 
         results = []
         for row in rows:
             record = dict(row)
-            record['messages'] = self._get_messages_by_record_id(record['id'])
+            record['messages'] = await self._get_messages_by_record_id(record['id'])
             results.append(record)
 
         return results
 
-    def _prepare_fts_keyword(self, keyword: str) -> str:
-        """
-        准备 FTS5 搜索关键词
-        处理特殊字符并添加通配符
-        
-        Args:
-            keyword: 原始搜索关键词
-            
-        Returns:
-            处理后的 FTS5 搜索字符串
-        """
-        keyword = keyword.strip()
-        
-        if not keyword:
-            return '""'
-        
-        fts_special_chars = ['"', "'", '*', '^', '(', ')', '{', '}', '[', ']']
-        for char in fts_special_chars:
-            keyword = keyword.replace(char, ' ')
-        
-        words = keyword.split()
-        if not words:
-            return '""'
-        
-        fts_words = []
-        for word in words:
-            if word:
-                fts_words.append(f'"{word}"*')
-        
-        return ' OR '.join(fts_words) if fts_words else '""'
-
-    def search_by_user(
+    async def search_by_user(
         self,
         user_id: int,
         group_id: Optional[int] = None,
         limit: int = 10,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        """根据用户搜索语录"""
+        conn = await self._get_conn()
 
-        base_query = """
+        query = """
             SELECT DISTINCT r.id, r.image_path, r.image_hash, r.group_id, r.created_at
-            FROM quotly_records r
-            JOIN quotly_messages m ON m.record_id = r.id
+            FROM quotly_records r JOIN quotly_messages m ON m.record_id = r.id
             WHERE m.user_id = ?
         """
         params = [user_id]
 
         if group_id is not None:
-            base_query += " AND r.group_id = ?"
+            query += " AND r.group_id = ?"
             params.append(group_id)
 
-        base_query += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+        query += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
-        cursor.execute(base_query, params)
-        rows = cursor.fetchall()
+        cursor = await conn.execute(query, params)
+        rows = await cursor.fetchall()
 
-        results = []
-        for row in rows:
-            record = dict(row)
-            record['messages'] = self._get_messages_by_record_id(record['id'])
-            results.append(record)
+        return [dict(row, messages=await self._get_messages_by_record_id(row['id'])) for row in rows]
 
-        return results
-
-    def get_random(
-        self,
-        group_id: Optional[int] = None,
-        limit: int = 1
-    ) -> List[Dict[str, Any]]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+    async def get_random(self, group_id: Optional[int] = None, limit: int = 1) -> List[Dict[str, Any]]:
+        """随机获取语录"""
+        conn = await self._get_conn()
 
         if group_id is not None:
-            cursor.execute("""
-                SELECT id, image_path, image_hash, group_id, created_at
-                FROM quotly_records
-                WHERE group_id = ?
-                ORDER BY RANDOM()
-                LIMIT ?
-            """, (group_id, limit))
+            cursor = await conn.execute(
+                "SELECT id, image_path, image_hash, group_id, created_at FROM quotly_records WHERE group_id = ? ORDER BY RANDOM() LIMIT ?",
+                (group_id, limit)
+            )
         else:
-            cursor.execute("""
-                SELECT id, image_path, image_hash, group_id, created_at
-                FROM quotly_records
-                ORDER BY RANDOM()
-                LIMIT ?
-            """, (limit,))
+            cursor = await conn.execute(
+                "SELECT id, image_path, image_hash, group_id, created_at FROM quotly_records ORDER BY RANDOM() LIMIT ?",
+                (limit,)
+            )
 
-        rows = cursor.fetchall()
+        rows = await cursor.fetchall()
+        return [dict(row, messages=await self._get_messages_by_record_id(row['id'])) for row in rows]
 
-        results = []
-        for row in rows:
-            record = dict(row)
-            record['messages'] = self._get_messages_by_record_id(record['id'])
-            results.append(record)
+    async def _get_messages_by_record_id(self, record_id: int) -> List[Dict[str, Any]]:
+        """根据记录ID获取消息列表"""
+        conn = await self._get_conn()
+        cursor = await conn.execute(
+            "SELECT seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time FROM quotly_messages WHERE record_id = ? ORDER BY seq",
+            (record_id,)
+        )
+        return [dict(row) for row in await cursor.fetchall()]
 
-        return results
+    async def get_stats(self) -> Dict[str, int]:
+        """获取统计信息"""
+        conn = await self._get_conn()
 
-    def _get_messages_by_record_id(self, record_id: int) -> List[Dict[str, Any]]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        cursor = await conn.execute("SELECT COUNT(*) FROM quotly_records")
+        total_records = (await cursor.fetchone())[0]
 
-        cursor.execute("""
-            SELECT seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time
-            FROM quotly_messages
-            WHERE record_id = ?
-            ORDER BY seq
-        """, (record_id,))
+        cursor = await conn.execute("SELECT COUNT(*) FROM quotly_messages")
+        total_messages = (await cursor.fetchone())[0]
 
-        return [dict(row) for row in cursor.fetchall()]
+        cursor = await conn.execute("SELECT COUNT(DISTINCT group_id) FROM quotly_records WHERE group_id IS NOT NULL")
+        total_groups = (await cursor.fetchone())[0]
 
-    def get_stats(self) -> Dict[str, int]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        return {'total_records': total_records, 'total_messages': total_messages, 'total_groups': total_groups}
 
-        cursor.execute("SELECT COUNT(*) FROM quotly_records")
-        total_records = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM quotly_messages")
-        total_messages = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(DISTINCT group_id) FROM quotly_records WHERE group_id IS NOT NULL")
-        total_groups = cursor.fetchone()[0]
-
-        return {
-            'total_records': total_records,
-            'total_messages': total_messages,
-            'total_groups': total_groups
-        }
-
-    def find_by_hash(self, image_hash: str, threshold: int = 5) -> List[Dict[str, Any]]:
-        """
-        根据图片hash查找记录（支持模糊匹配）
-
-        Args:
-            image_hash: 要匹配的hash值
-            threshold: 汉明距离阈值，小于等于此值认为匹配
-
-        Returns:
-            匹配的记录列表
-        """
+    async def find_by_hash(self, image_hash: str, threshold: int = 5) -> List[Dict[str, Any]]:
+        """根据图片hash查找记录"""
         from utils.image_hash import hamming_distance
 
-        conn = self._get_conn()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT id, image_path, image_hash, group_id, created_at
-            FROM quotly_records
-        """)
-        rows = cursor.fetchall()
+        conn = await self._get_conn()
+        cursor = await conn.execute("SELECT id, image_path, image_hash, group_id, created_at FROM quotly_records")
+        rows = await cursor.fetchall()
 
         results = []
         for row in rows:
-            record = dict(row)
-            stored_hash = record.get('image_hash', '')
+            stored_hash = row['image_hash']
             if stored_hash:
                 distance = hamming_distance(image_hash, stored_hash)
                 if 0 <= distance <= threshold:
-                    record['hamming_distance'] = distance
-                    record['messages'] = self._get_messages_by_record_id(record['id'])
-                    results.append(record)
+                    results.append({
+                        **dict(row),
+                        'hamming_distance': distance,
+                        'messages': await self._get_messages_by_record_id(row['id'])
+                    })
 
         results.sort(key=lambda x: x.get('hamming_distance', 999))
         return results
 
-    def delete_by_id(self, record_id: int) -> bool:
-        """
-        根据记录ID删除语录记录
+    async def delete_by_id(self, record_id: int) -> bool:
+        """根据记录ID删除语录记录"""
+        conn = await self._get_conn()
 
-        Args:
-            record_id: 记录ID
-
-        Returns:
-            是否删除成功
-        """
-        conn = self._get_conn()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT image_path FROM quotly_records WHERE id = ?
-        """, (record_id,))
-        row = cursor.fetchone()
+        cursor = await conn.execute("SELECT image_path FROM quotly_records WHERE id = ?", (record_id,))
+        row = await cursor.fetchone()
 
         if not row:
             return False
 
+        async with self._lock:
+            await conn.execute("DELETE FROM quotly_search WHERE record_id = ?", (record_id,))
+            await conn.execute("DELETE FROM quotly_messages WHERE record_id = ?", (record_id,))
+            await conn.execute("DELETE FROM quotly_records WHERE id = ?", (record_id,))
+            await conn.commit()
+
         image_path = row[0]
-
-        cursor.execute("DELETE FROM quotly_search WHERE record_id = ?", (record_id,))
-        cursor.execute("DELETE FROM quotly_messages WHERE record_id = ?", (record_id,))
-        cursor.execute("DELETE FROM quotly_records WHERE id = ?", (record_id,))
-
-        conn.commit()
-
         if image_path:
             try:
                 Path(image_path).unlink(missing_ok=True)
-                logger.debug(f"已删除图片文件: {image_path}")
             except Exception as e:
                 logger.warning(f"删除图片文件失败: {e}")
 
         logger.info(f"已删除语录记录: record_id={record_id}")
         return True
 
-    def close(self):
+    def _prepare_fts_keyword(self, keyword: str) -> str:
+        """准备 FTS5 搜索关键词"""
+        keyword = keyword.strip()
+        if not keyword:
+            return '""'
+
+        for char in ['"', "'", '*', '^', '(', ')', '{', '}', '[', ']']:
+            keyword = keyword.replace(char, ' ')
+
+        words = [f'"{w}"*' for w in keyword.split() if w]
+        return ' OR '.join(words) if words else '""'
+
+    async def close(self):
+        """关闭数据库连接"""
         if self._conn:
-            self._conn.close()
+            await self._conn.close()
             self._conn = None
             logger.debug("Quotly 数据库连接已关闭")

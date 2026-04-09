@@ -416,7 +416,7 @@ class QuotlyPlugin(Star):
 
             image_hash = compute_phash(png_data) or "unknown"
 
-            duplicate_records = self.db.find_by_hash(image_hash, threshold=5)
+            duplicate_records = await self.db.find_by_hash(image_hash, threshold=5)
             if duplicate_records:
                 duplicate = duplicate_records[0]
                 distance = duplicate.get('hamming_distance', 0)
@@ -466,7 +466,7 @@ class QuotlyPlugin(Star):
                 })
 
             try:
-                self.db.save_record(image_hash, png_data, group_id, storage_messages)
+                await self.db.save_record(image_hash, png_data, group_id, storage_messages)
                 logger.debug(f"Quotly 记录已保存: hash={image_hash}")
             except Exception as e:
                 logger.warning(f"保存 Quotly 记录失败: {e}")
@@ -556,9 +556,9 @@ class QuotlyPlugin(Star):
         try:
             search_limit = 20
             if user_id:
-                results = self.db.search_by_user(user_id, group_id, limit=search_limit)
+                results = await self.db.search_by_user(user_id, group_id, limit=search_limit)
             elif keyword:
-                results = self.db.search_by_keyword(keyword, group_id, limit=search_limit)
+                results = await self.db.search_by_keyword(keyword, group_id, limit=search_limit)
             else:
                 yield event.plain_result("请提供搜索关键词或使用 -u 指定用户")
                 return
@@ -619,7 +619,7 @@ class QuotlyPlugin(Star):
                 pass
 
         try:
-            results = self.db.get_random(group_id, limit=1)
+            results = await self.db.get_random(group_id, limit=1)
 
             if not results:
                 search_scope = "所有群" if group_id is None else "本群"
@@ -645,7 +645,7 @@ class QuotlyPlugin(Star):
         用法: /qstats
         """
         try:
-            stats = self.db.get_stats()
+            stats = await self.db.get_stats()
             yield event.plain_result(
                 f"Quotly 统计:\n"
                 f"总记录数: {stats['total_records']}\n"
@@ -716,11 +716,11 @@ class QuotlyPlugin(Star):
                     logger.warning(f"无法计算图片hash: {image_url}")
                     continue
 
-                matches = self.db.find_by_hash(image_hash, threshold=5)
+                matches = await self.db.find_by_hash(image_hash, threshold=5)
 
                 for match in matches:
                     record_id = match.get('id')
-                    if self.db.delete_by_id(record_id):
+                    if await self.db.delete_by_id(record_id):
                         deleted_count += 1
                         logger.info(f"已删除语录: record_id={record_id}, hash={image_hash}")
 
@@ -772,9 +772,9 @@ class QuotlyPlugin(Star):
             keyword = keyword.strip()
             
             if search_user_id:
-                results = self.db.search_by_user(search_user_id, search_group_id, limit=5)
+                results = await self.db.search_by_user(search_user_id, search_group_id, limit=5)
             elif keyword:
-                results = self.db.search_by_keyword(keyword, search_group_id, limit=5)
+                results = await self.db.search_by_keyword(keyword, search_group_id, limit=5)
             else:
                 yield event.plain_result("请提供搜索关键词")
                 return
@@ -792,8 +792,7 @@ class QuotlyPlugin(Star):
                 if messages:
                     contents = [m.get('content', '') for m in messages[:3]]
                     content_preview = " | ".join([c[:50] for c in contents if c])
-                
-                await asyncio.sleep(random.uniform(0, 2))
+
                 yield event.chain_result([
                     Comp.Image.fromFileSystem(image_path),
                     Comp.Plain(f"\n找到 {len(results)} 条记录，显示第1条。{content_preview}")
@@ -830,7 +829,7 @@ class QuotlyPlugin(Star):
                 except ValueError:
                     pass
 
-            results = self.db.get_random(search_group_id, limit=1)
+            results = await self.db.get_random(search_group_id, limit=1)
 
             if not results:
                 search_scope = "所有群" if search_group_id is None else "本群"
@@ -845,8 +844,7 @@ class QuotlyPlugin(Star):
                 if messages:
                     contents = [m.get('content', '') for m in messages[:3]]
                     content_preview = " | ".join([c[:50] for c in contents if c])
-                
-                await asyncio.sleep(random.uniform(0, 2))
+
                 yield event.chain_result([
                     Comp.Image.fromFileSystem(image_path),
                     Comp.Plain(f"\n{content_preview}" if content_preview else "")
@@ -861,5 +859,5 @@ class QuotlyPlugin(Star):
     async def terminate(self):
         """插件卸载时调用"""
         await self.renderer.cleanup()
-        self.db.close()
+        await self.db.close()
         logger.info("Quotly 插件已卸载")
