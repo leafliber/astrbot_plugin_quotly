@@ -242,7 +242,25 @@ class MessageProvider:
             if mr_type in ("Plain", "Text"):
                 ob_segment["data"]["text"] = segment.get("text", "")
             elif mr_type == "Image":
-                ob_segment["data"]["url"] = segment.get("url", "") or segment.get("file", "")
+                local_path = segment.get("local_path", "")
+                media_url = segment.get("media_url", "")
+                original_url = segment.get("url", "") or segment.get("file", "")
+                
+                if local_path and self._mr_api:
+                    abs_path = self._mr_api.get_media_absolute_path(local_path)
+                    if abs_path:
+                        ob_segment["data"]["url"] = f"file://{abs_path}"
+                        ob_segment["data"]["local_path"] = abs_path
+                    else:
+                        ob_segment["data"]["url"] = original_url
+                elif media_url:
+                    base_url = getattr(self._mr_api, "web_base_url", "") if self._mr_api else ""
+                    if base_url:
+                        ob_segment["data"]["url"] = f"{base_url.rstrip('/')}{media_url}"
+                    else:
+                        ob_segment["data"]["url"] = original_url
+                else:
+                    ob_segment["data"]["url"] = original_url
                 ob_segment["data"]["file"] = segment.get("file", "")
             elif mr_type == "Face":
                 ob_segment["data"]["id"] = segment.get("id", "")
@@ -476,7 +494,7 @@ class MessageProvider:
             count = len(pick_indices)
 
         if need_more and group_id:
-            fetch_count = 100 if pick_indices else (count * 5 if filter_user_id else count)
+            fetch_count = 100 if pick_indices else (count * 5 if filter_user_id else count - 1)
             fetch_count = min(fetch_count, 100)
 
             newer_messages = await self.get_messages_after(
