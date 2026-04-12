@@ -12,8 +12,7 @@ from core.quotly_renderer import QuotlyRenderer
 
 def test_html_generation():
     """测试 HTML 生成"""
-    font_dir = Path(__file__).parent.parent / "assets" / "fonts"
-    renderer = QuotlyRenderer(str(font_dir))
+    renderer = QuotlyRenderer()
 
     messages = [
         {
@@ -89,8 +88,7 @@ def test_html_generation():
 
 def test_escape_html():
     """测试 HTML 转义"""
-    font_dir = Path(__file__).parent.parent / "assets" / "fonts"
-    renderer = QuotlyRenderer(str(font_dir))
+    renderer = QuotlyRenderer()
 
     print()
     print("=" * 60)

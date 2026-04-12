@@ -4,7 +4,6 @@ QQ 聊天气泡样式 1:1 复刻
 """
 
 import asyncio
-import base64
 from pathlib import Path
 from typing import List, Optional
 from astrbot.api import logger
@@ -21,36 +20,13 @@ class QuotlyRenderer:
         初始化渲染器
 
         Args:
-            font_dir: 字体目录路径，默认为 assets/fonts/
+            font_dir: 字体目录路径（已弃用，保留参数兼容性）
         """
-        if font_dir is None:
-            plugin_dir = Path(__file__).parent.parent
-            font_dir = plugin_dir / "assets" / "fonts"
-
-        self.font_dir = Path(font_dir)
-        
-        # 优先使用鸿蒙字体，如果不存在则使用思源黑体
-        font_path = self.font_dir / "HarmonyOS_Sans_SC_Regular.ttf"
-        if font_path.exists():
-            self.font_name = "HarmonyOS Sans SC"
-            self.font_format = "truetype"
-        else:
-            font_path = self.font_dir / "SourceHanSansCN-Regular.otf"
-            self.font_name = "SourceHanSansCN"
-            self.font_format = "opentype"
-
-        # 读取字体文件并转为 base64
-        with open(font_path, 'rb') as f:
-            font_data = f.read()
-        self.font_base64 = base64.b64encode(font_data).decode('ascii')
-        
-        # 实例级别的浏览器管理
         self._playwright = None
         self._browser = None
         self._lock = asyncio.Lock()
         self._initialized = False
         
-        # 实例计数
         QuotlyRenderer._instance_count += 1
         logger.debug(f"QuotlyRenderer 实例创建，当前实例数: {QuotlyRenderer._instance_count}")
 
@@ -247,14 +223,6 @@ class QuotlyRenderer:
 <head>
     <meta charset="UTF-8">
     <style>
-        @font-face {{
-            font-family: '{self.font_name}';
-            src: url('data:font/{self.font_format};base64,{self.font_base64}') format('{self.font_format}');
-            font-weight: normal;
-            font-style: normal;
-            font-display: block;
-        }}
-
         * {{
             margin: 0;
             padding: 0;
@@ -262,7 +230,7 @@ class QuotlyRenderer:
         }}
 
         body {{
-            font-family: '{self.font_name}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            font-family: 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             background: #e8e8ed;
             padding: 0;
             display: inline-flex;

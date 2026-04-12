@@ -17,8 +17,7 @@ class TestQuotlyRenderer:
 
     def setup_method(self):
         """每个测试方法执行前的setup"""
-        font_dir = Path(__file__).parent.parent / "assets" / "fonts"
-        self.renderer = QuotlyRenderer(str(font_dir))
+        self.renderer = QuotlyRenderer()
 
     def teardown_method(self):
         """每个测试方法执行后的清理"""

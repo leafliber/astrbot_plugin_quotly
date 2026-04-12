@@ -17,9 +17,7 @@ from core.quotly_renderer import QuotlyRenderer
 async def test_render():
     """测试渲染功能"""
     
-    # 初始化渲染器
-    font_dir = Path(__file__).parent / "assets" / "fonts"
-    renderer = QuotlyRenderer(str(font_dir))
+    renderer = QuotlyRenderer()
     
     # 测试消息列表
     test_messages = [

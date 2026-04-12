@@ -38,8 +38,7 @@ class QuotlyPlugin(Star):
         self.parser = MessageParser()
         self.onebot = OneBotClient()
 
-        font_dir = Path(__file__).parent / "assets" / "fonts"
-        self.renderer = QuotlyRenderer(str(font_dir))
+        self.renderer = QuotlyRenderer()
 
         plugin_name = getattr(self, 'name', 'quotly')
         self.db = QuotlyDatabase(plugin_name=plugin_name)
