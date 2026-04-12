@@ -267,7 +267,7 @@ class MessageProvider:
 
         if mr_api:
             try:
-                mr_msg = await mr_api.get_by_id(int(message_id))
+                mr_msg = await mr_api.get_by_platform_message_id(str(message_id))
                 if mr_msg:
                     render_msg = await self.convert_mr_to_render(mr_msg, group_id)
                     raw = mr_msg.get_raw_message_dict() or {}
@@ -325,7 +325,7 @@ class MessageProvider:
 
         if mr_api:
             try:
-                ref_msg = await mr_api.get_by_id(int(reference_message_id))
+                ref_msg = await mr_api.get_by_platform_message_id(str(reference_message_id))
                 if ref_msg:
                     context = await mr_api.get_context(
                         message_id=ref_msg.id,
