@@ -16,7 +16,6 @@ class RenderMessage:
     card: str
     title: str
     role: str
-    content: str
     time_str: str
     timestamp: int
     avatar_url: str
@@ -189,62 +188,17 @@ class MessageProvider:
             card, title, role = await self._get_qq_sender_info_via_onebot(group_id, user_id)
             logger.debug(f"无原始消息，从 OneBot API 获取发送者信息: card={card}, title={title}, role={role}")
 
-        content = mr_message.message_str or ""
-        if not content:
-            chain = mr_message.get_message_chain_list()
-            if chain:
-                content = self._parse_mr_chain_to_text(chain)
-
         return RenderMessage(
             user_id=user_id,
             nickname=mr_message.sender_name or "",
             card=card,
             title=title,
             role=role,
-            content=content,
             time_str=self._format_time_short(timestamp),
             timestamp=timestamp,
             avatar_url=self._get_avatar_url(user_id, platform),
             raw_message=mr_message.get_raw_message_dict()
         )
-
-    def _parse_mr_chain_to_text(self, chain: list) -> str:
-        """
-        将 message_recorder 消息链转换为纯文本
-
-        Args:
-            chain: message_recorder 消息链列表
-
-        Returns:
-            纯文本内容
-        """
-        if not chain:
-            return ""
-
-        text_parts = []
-        for segment in chain:
-            if isinstance(segment, dict):
-                seg_type = segment.get("type", "")
-
-                if seg_type == "Plain":
-                    text_parts.append(segment.get("text", ""))
-                elif seg_type == "Image":
-                    url = segment.get("url", "") or segment.get("file", "")
-                    text_parts.append(f"[图片]({url})" if url else "[图片]")
-                elif seg_type == "Face":
-                    name = segment.get("name", "") or f"表情{segment.get('id', '')}"
-                    text_parts.append(f"[{name}]")
-                elif seg_type == "Mface":
-                    url = segment.get("url", "")
-                    text_parts.append(f"[图片]({url})" if url else f"[{segment.get('summary', '表情')}]")
-                elif seg_type == "Record":
-                    text_parts.append("[语音]")
-                elif seg_type == "Video":
-                    text_parts.append("[视频]")
-                elif seg_type == "At":
-                    text_parts.append(f"@{segment.get('name', '')}")
-
-        return "".join(text_parts).strip()
 
     def _convert_mr_chain_to_onebot(self, chain: list) -> list:
         """
@@ -356,7 +310,7 @@ class MessageProvider:
                         "message": ob_chain,
                         "time": render_msg.timestamp,
                         "raw_message": raw,
-                        "_source": "message_recorder"
+                        "_source": "onebot"
                     }
             except Exception as e:
                 logger.warning(f"通过 message_recorder 获取消息失败: message_id={message_id}, 错误: {e}")
@@ -429,7 +383,7 @@ class MessageProvider:
                             "message": ob_chain,
                             "time": render_msg.timestamp,
                             "raw_message": raw,
-                            "_source": "message_recorder"
+                            "_source": "onebot"
                         })
 
                         if len(messages) >= count:

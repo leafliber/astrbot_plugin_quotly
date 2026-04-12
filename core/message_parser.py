@@ -108,13 +108,12 @@ class MessageParser:
             sender.get("role", "member")
         )
 
-    def parse_message_content(self, message, source: str = "onebot") -> tuple[str, Optional[int]]:
+    def parse_message_content(self, message) -> tuple[str, Optional[int]]:
         """
         解析消息内容，提取纯文本和回复信息
 
         Args:
-            message: 消息数组
-            source: 消息来源，"onebot" 或 "message_recorder"
+            message: 消息数组（OneBot11 格式）
 
         Returns:
             (纯文本内容, 回复消息ID)
@@ -130,24 +129,14 @@ class MessageParser:
 
         for segment in message:
             if isinstance(segment, dict):
-                if source == "message_recorder":
-                    self._parse_mr_segment(segment, text_parts)
-                    if segment.get("type") == "Reply":
-                        rid = segment.get("id") or segment.get("message_id")
-                        if rid is not None:
-                            try:
-                                reply_id = int(rid)
-                            except (ValueError, TypeError):
-                                pass
-                else:
-                    self._parse_onebot_segment(segment, text_parts)
-                    if segment.get("type") == "reply":
-                        rid = segment.get("data", {}).get("id")
-                        if rid is not None:
-                            try:
-                                reply_id = int(rid)
-                            except (ValueError, TypeError):
-                                pass
+                self._parse_onebot_segment(segment, text_parts)
+                if segment.get("type") == "reply":
+                    rid = segment.get("data", {}).get("id")
+                    if rid is not None:
+                        try:
+                            reply_id = int(rid)
+                        except (ValueError, TypeError):
+                            pass
             elif hasattr(segment, 'type'):
                 self._parse_obj_segment(segment, text_parts)
                 seg_type = self._get_segment_type(segment)
@@ -183,28 +172,6 @@ class MessageParser:
             text_parts.append("[视频]")
         elif seg_type == "at":
             text_parts.append(f"@{seg_data.get('name', '')}")
-
-    def _parse_mr_segment(self, segment: dict, text_parts: list):
-        """解析 message_recorder 格式消息段"""
-        seg_type = segment.get("type")
-
-        if seg_type == "Plain":
-            text_parts.append(segment.get("text", ""))
-        elif seg_type == "Image":
-            url = segment.get("url", "") or segment.get("file", "")
-            text_parts.append(f"[图片]({url})" if url else "[图片]")
-        elif seg_type == "Face":
-            name = segment.get("name", "") or f"表情{segment.get('id', '')}"
-            text_parts.append(f"[{name}]")
-        elif seg_type == "Mface":
-            url = segment.get("url", "")
-            text_parts.append(f"[图片]({url})" if url else f"[{segment.get('summary', '表情')}]")
-        elif seg_type == "Record":
-            text_parts.append("[语音]")
-        elif seg_type == "Video":
-            text_parts.append("[视频]")
-        elif seg_type == "At":
-            text_parts.append(f"@{segment.get('name', '')}")
 
     def _parse_obj_segment(self, segment, text_parts: list):
         """解析对象形式的消息段"""

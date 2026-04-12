@@ -341,7 +341,7 @@ class QuotlyPlugin(Star):
                 msg_content = msg_data_item.get("message", [])
                 logger.debug(f"解析消息内容: message 类型={type(msg_content)}, 内容={msg_content}")
                 
-                parse_result = self.parser.parse_message_content(msg_content, source=source)
+                parse_result = self.parser.parse_message_content(msg_content)
                 logger.debug(f"parse_message_content 返回值: 类型={type(parse_result)}, 值={parse_result}")
                 
                 if not isinstance(parse_result, tuple) or len(parse_result) != 2:
@@ -380,10 +380,8 @@ class QuotlyPlugin(Star):
                             else:
                                 _, reply_nickname, reply_card, _, _ = self.parser.parse_sender_info(reply_sender)
                             
-                            reply_source = reply_msg_data.get("_source", "onebot")
                             reply_content, _ = self.parser.parse_message_content(
-                                reply_msg_data.get("message", []),
-                                source=reply_source
+                                reply_msg_data.get("message", [])
                             )
                             
                             if len(reply_content) > 50:
@@ -446,7 +444,7 @@ class QuotlyPlugin(Star):
                 else:
                     user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
                 
-                content, _ = self.parser.parse_message_content(msg_data_item.get("message", []), source=source)
+                content, _ = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
                 original_time = msg_data_item.get("time", 0)
 
