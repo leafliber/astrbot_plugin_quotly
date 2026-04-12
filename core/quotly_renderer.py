@@ -101,12 +101,12 @@ class QuotlyRenderer:
         # 使用全局浏览器实例创建新页面
         page = await self._browser.new_page(viewport={"width": 800, "height": 100})
         try:
-            await page.set_content(html_content, wait_until="domcontentloaded", timeout=5000)
+            await page.set_content(html_content, wait_until="networkidle", timeout=30000)
             
             try:
                 await page.wait_for_function(
                     """() => document.fonts.ready.then(() => true)""",
-                    timeout=5000
+                    timeout=15000
                 )
             except Exception:
                 pass
@@ -117,7 +117,7 @@ class QuotlyRenderer:
                         const images = document.querySelectorAll('img');
                         return Array.from(images).every(img => img.complete);
                     }""",
-                    timeout=5000
+                    timeout=10000
                 )
             except Exception:
                 pass
