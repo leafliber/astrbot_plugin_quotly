@@ -158,8 +158,7 @@ class MessageProvider:
     async def convert_mr_to_render(
         self,
         mr_message: Any,
-        group_id: Optional[int] = None,
-        use_raw_message: bool = True
+        group_id: Optional[int] = None
     ) -> RenderMessage:
         """
         将 message_recorder 的 MessageRecord 转换为 RenderMessage
@@ -167,7 +166,6 @@ class MessageProvider:
         Args:
             mr_message: MessageRecord 实例
             group_id: 群号（用于获取群成员信息）
-            use_raw_message: 是否尝试从 raw_message 提取 QQ 专属字段
 
         Returns:
             RenderMessage 实例
@@ -180,27 +178,22 @@ class MessageProvider:
         title = ""
         role = "member"
 
-        if use_raw_message:
+        has_raw = bool(mr_message.raw_message)
+        
+        if has_raw:
             raw = mr_message.get_raw_message_dict()
             if raw:
                 card, title, role = self._extract_qq_sender_info(raw)
                 logger.debug(f"从 raw_message 提取发送者信息: card={card}, title={title}, role={role}")
-
-        if (not card or not title) and group_id and platform == "qq":
-            ob_card, ob_title, ob_role = await self._get_qq_sender_info_via_onebot(group_id, user_id)
-            if not card and ob_card:
-                card = ob_card
-            if not title and ob_title:
-                title = ob_title
-            if role == "member" and ob_role != "member":
-                role = ob_role
-            logger.debug(f"从 OneBot API 补充发送者信息: card={card}, title={title}, role={role}")
+        elif group_id and platform == "qq":
+            card, title, role = await self._get_qq_sender_info_via_onebot(group_id, user_id)
+            logger.debug(f"无原始消息，从 OneBot API 获取发送者信息: card={card}, title={title}, role={role}")
 
         content = mr_message.message_str or ""
         if not content:
             chain = mr_message.get_message_chain_list()
             if chain:
-                content = self._parse_message_chain_to_text(chain)
+                content = self._parse_mr_chain_to_text(chain)
 
         return RenderMessage(
             user_id=user_id,
@@ -212,15 +205,15 @@ class MessageProvider:
             time_str=self._format_time_short(timestamp),
             timestamp=timestamp,
             avatar_url=self._get_avatar_url(user_id, platform),
-            raw_message=mr_message.get_raw_message_dict() if use_raw_message else None
+            raw_message=mr_message.get_raw_message_dict()
         )
 
-    def _parse_message_chain_to_text(self, chain: list) -> str:
+    def _parse_mr_chain_to_text(self, chain: list) -> str:
         """
-        将消息链转换为纯文本（支持 OneBot11 和 message_recorder 两种格式）
+        将 message_recorder 消息链转换为纯文本
 
         Args:
-            chain: 消息链列表
+            chain: message_recorder 消息链列表
 
         Returns:
             纯文本内容
@@ -232,40 +225,22 @@ class MessageProvider:
         for segment in chain:
             if isinstance(segment, dict):
                 seg_type = segment.get("type", "")
-                seg_data = segment.get("data", {})
 
-                if seg_type == "text":
-                    text_parts.append(seg_data.get("text", ""))
-                elif seg_type == "Plain":
+                if seg_type == "Plain":
                     text_parts.append(segment.get("text", ""))
-                elif seg_type == "image":
-                    url = seg_data.get("url", "") or seg_data.get("file", "")
-                    text_parts.append(f"[图片]({url})" if url else "[图片]")
                 elif seg_type == "Image":
                     url = segment.get("url", "") or segment.get("file", "")
                     text_parts.append(f"[图片]({url})" if url else "[图片]")
-                elif seg_type == "face":
-                    name = seg_data.get("name", "") or f"表情{seg_data.get('id', '')}"
-                    text_parts.append(f"[{name}]")
                 elif seg_type == "Face":
                     name = segment.get("name", "") or f"表情{segment.get('id', '')}"
                     text_parts.append(f"[{name}]")
-                elif seg_type == "mface":
-                    url = seg_data.get("url", "")
-                    text_parts.append(f"[图片]({url})" if url else f"[{seg_data.get('summary', '表情')}]")
                 elif seg_type == "Mface":
                     url = segment.get("url", "")
                     text_parts.append(f"[图片]({url})" if url else f"[{segment.get('summary', '表情')}]")
-                elif seg_type == "record":
-                    text_parts.append("[语音]")
                 elif seg_type == "Record":
                     text_parts.append("[语音]")
-                elif seg_type == "video":
-                    text_parts.append("[视频]")
                 elif seg_type == "Video":
                     text_parts.append("[视频]")
-                elif seg_type == "at":
-                    text_parts.append(f"@{seg_data.get('name', '')}")
                 elif seg_type == "At":
                     text_parts.append(f"@{segment.get('name', '')}")
 
