@@ -307,11 +307,12 @@ class QuotlyPlugin(Star):
         logger.debug(f"准备获取消息: count={count}, group_id={group_id}, message_seq={message_seq}")
 
         if need_more and group_id:
-            fetch_count = count
-            if filter_user_id:
-                fetch_count = min(count * 5, 100)
             if pick_indices:
-                fetch_count = max(fetch_count, max(pick_indices))
+                fetch_count = 100
+            else:
+                fetch_count = count
+                if filter_user_id:
+                    fetch_count = min(count * 5, 100)
             fetch_count = min(fetch_count, 100)
             
             history = await self.onebot.get_history(group_id, 0, fetch_count)
@@ -349,7 +350,6 @@ class QuotlyPlugin(Star):
                 if reply_idx >= 0:
                     newer_messages = messages_history[reply_idx + 1:]
                 else:
-                    # 如果没找到，使用 time 来判断
                     newer_messages = [m for m in messages_history if m.get("time", 0) > reply_time]
                 
                 logger.debug(f"更新的消息数量: {len(newer_messages)}")
@@ -359,7 +359,9 @@ class QuotlyPlugin(Star):
                 
                 # 取需要的数量
                 need_count = count - 1
-                if filter_user_id or pick_indices:
+                if pick_indices:
+                    need_count = max(pick_indices) - 1
+                if filter_user_id:
                     need_count = len(newer_messages)
                 if len(newer_messages) > need_count:
                     newer_messages = newer_messages[:need_count]

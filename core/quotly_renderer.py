@@ -5,7 +5,7 @@ QQ 聊天气泡样式 1:1 复刻
 
 import asyncio
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 from astrbot.api import logger
 
 
@@ -15,12 +15,9 @@ class QuotlyRenderer:
     _global_lock = asyncio.Lock()
     _instance_count = 0
 
-    def __init__(self, font_dir: Optional[str] = None):
+    def __init__(self):
         """
         初始化渲染器
-
-        Args:
-            font_dir: 字体目录路径（已弃用，保留参数兼容性）
         """
         self._playwright = None
         self._browser = None
@@ -180,7 +177,7 @@ class QuotlyRenderer:
                 if role == "owner":
                     header_html += '<span class="title-owner">群主</span>'
                 elif role == "admin":
-                    display_title = title if title else "管理"
+                    display_title = title if title else "管理员"
                     header_html += f'<span class="title-admin">{display_title}</span>'
                 elif title:
                     header_html += f'<span class="title-special">{title}</span>'
@@ -238,9 +235,9 @@ class QuotlyRenderer:
 <head>
     <meta charset="UTF-8">
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
-    <link href="https://cdn.jsdelivr.net/npm/noto-sans-cjk-sc@latest/regular.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/noto-sans-cjk-sc@latest/medium.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/noto-sans-cjk-sc@latest/bold.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet">
     <style>
         * {{
             margin: 0;
@@ -249,7 +246,7 @@ class QuotlyRenderer:
         }}
 
         body {{
-            font-family: 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            font-family: 'HarmonyOS Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #ebebf0;
             padding: 0;
             display: inline-flex;
