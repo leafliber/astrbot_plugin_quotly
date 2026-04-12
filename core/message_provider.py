@@ -32,7 +32,6 @@ class MessageProvider:
         self.onebot = onebot_client
         self.parser = message_parser
         self._mr_api = None
-        self._mr_checked = False
 
     async def get_message_recorder_api(self) -> Optional[Any]:
         """
@@ -41,22 +40,34 @@ class MessageProvider:
         Returns:
             message_recorder API 实例，如果不可用则返回 None
         """
-        if self._mr_checked:
-            return self._mr_api
-
-        self._mr_checked = True
-
         try:
             recorder = self.context.get_registered_star("astrbot_plugin_message_recorder")
-            if recorder and hasattr(recorder, "get_api"):
-                self._mr_api = recorder.get_api()
-                if self._mr_api:
+            logger.debug(f"get_registered_star 返回: {recorder}, 类型: {type(recorder)}")
+            
+            if recorder is None:
+                logger.debug("message_recorder 插件未注册，可能未安装或未启用")
+                return None
+            
+            logger.debug(f"hasattr(recorder, 'get_api'): {hasattr(recorder, 'get_api')}")
+            
+            if hasattr(recorder, "get_api"):
+                api = recorder.get_api()
+                logger.debug(f"get_api() 返回: {api}, 类型: {type(api)}")
+                
+                if api:
+                    self._mr_api = api
                     logger.info("message_recorder 插件 API 可用，将优先使用其获取消息")
-                    return self._mr_api
+                    return api
+                else:
+                    logger.debug("get_api() 返回 None，插件可能尚未完成初始化")
+            else:
+                logger.debug("recorder 没有 get_api 方法")
+                
         except Exception as e:
-            logger.debug(f"获取 message_recorder API 失败: {e}")
+            logger.warning(f"获取 message_recorder API 失败: {e}")
+            import traceback
+            logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
 
-        logger.info("message_recorder 插件不可用，将使用 OneBot API 获取消息")
         return None
 
     def _format_time_short(self, timestamp: int) -> str:
@@ -275,6 +286,7 @@ class MessageProvider:
                 logger.warning(f"通过 message_recorder 获取消息失败: message_id={message_id}, 错误: {e}")
 
         if self.onebot:
+            logger.debug("message_recorder 不可用，降级使用 OneBot API")
             try:
                 msg_data = await self.onebot.get_msg(message_id)
                 if msg_data:
@@ -352,6 +364,7 @@ class MessageProvider:
                 logger.warning(f"通过 message_recorder 获取历史消息失败: {e}")
 
         if self.onebot:
+            logger.debug("message_recorder 不可用，降级使用 OneBot API")
             try:
                 history = await self.onebot.get_history(group_id, 0, count * 3)
                 if history:
