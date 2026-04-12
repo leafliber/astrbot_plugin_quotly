@@ -237,7 +237,7 @@ class QuotlyRenderer:
 
         body {{
             font-family: 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans CN', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            background: #e8e8ed;
+            background: #ebebf0;
             padding: 0;
             display: inline-flex;
             justify-content: center;
@@ -250,7 +250,7 @@ class QuotlyRenderer:
             width: fit-content;
             max-width: 1200px;
             min-width: 200px;
-            background: #e8e8ed;
+            background: #ebebf0;
             padding: 30px;
         }}
 
