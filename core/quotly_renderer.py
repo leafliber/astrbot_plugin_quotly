@@ -102,6 +102,15 @@ class QuotlyRenderer:
         page = await self._browser.new_page(viewport={"width": 800, "height": 100})
         try:
             await page.set_content(html_content, wait_until="domcontentloaded", timeout=5000)
+            
+            try:
+                await page.wait_for_function(
+                    """() => document.fonts.ready.then(() => true)""",
+                    timeout=5000
+                )
+            except Exception:
+                pass
+            
             try:
                 await page.wait_for_function(
                     """() => {
@@ -228,6 +237,10 @@ class QuotlyRenderer:
 <html>
 <head>
     <meta charset="UTF-8">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link href="https://cdn.jsdelivr.net/npm/noto-sans-cjk-sc@latest/regular.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/noto-sans-cjk-sc@latest/medium.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/noto-sans-cjk-sc@latest/bold.css" rel="stylesheet">
     <style>
         * {{
             margin: 0;
