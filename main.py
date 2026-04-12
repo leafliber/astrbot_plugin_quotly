@@ -103,6 +103,30 @@ class QuotlyPlugin(Star):
         
         return image_urls
 
+    def _truncate_base64_in_message(self, message: list, max_len: int = 50) -> list:
+        """
+        截断消息中的 base64 数据，用于日志输出
+        
+        Args:
+            message: 消息列表
+            max_len: base64 数据最大显示长度
+            
+        Returns:
+            处理后的消息列表（仅用于日志）
+        """
+        import copy
+        result = copy.deepcopy(message)
+        for seg in result:
+            if isinstance(seg, dict) and "data" in seg:
+                data = seg["data"]
+                if isinstance(data, dict):
+                    for key in ["url", "file"]:
+                        if key in data and isinstance(data[key], str):
+                            val = data[key]
+                            if val.startswith("data:") and len(val) > max_len:
+                                data[key] = val[:max_len] + f"...(共{len(val)}字符)"
+        return result
+
     async def _ocr_image(self, image_url: str) -> str:
         """
         使用AstrBot的视觉模型对图片进行OCR识别
@@ -335,7 +359,8 @@ class QuotlyPlugin(Star):
                     user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
                 
                 msg_content = msg_data_item.get("message", [])
-                logger.debug(f"解析消息内容: message 类型={type(msg_content)}, 内容={msg_content}")
+                log_content = self._truncate_base64_in_message(msg_content)
+                logger.debug(f"解析消息内容: message 类型={type(msg_content)}, 内容={log_content}")
                 
                 parse_result = self.parser.parse_message_content(msg_content)
                 logger.debug(f"parse_message_content 返回值: 类型={type(parse_result)}, 值={parse_result}")
