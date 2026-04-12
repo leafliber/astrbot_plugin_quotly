@@ -52,9 +52,8 @@ playwright install --with-deps chromium
 
 - **更稳定的历史消息获取** - 无依赖 OneBot API 的历史消息接口
 - **跨平台支持** - 未来可支持 Telegram、Discord 等平台
-- **完整消息信息** - 保存原始消息对象，包含群名片、头衔等完整信息
 
-安装后请在 message_recorder 插件配置中启用"是否保存原始消息对象（平台原始数据）" `save_raw_message: true`，以保存完整的消息信息。
+> Quotly 会自动通过 OneBot API 获取群成员的头衔、名片等信息，无需额外配置 message_recorder。
 
 > 如果未安装 message_recorder 插件，Quotly 会自动降级使用 OneBot API 获取消息，功能不受影响但仅支持 QQ 平台。
 

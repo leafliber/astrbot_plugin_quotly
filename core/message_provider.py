@@ -186,9 +186,15 @@ class MessageProvider:
                 card, title, role = self._extract_qq_sender_info(raw)
                 logger.debug(f"从 raw_message 提取发送者信息: card={card}, title={title}, role={role}")
 
-        if not card and not title and group_id and platform == "qq":
-            card, title, role = await self._get_qq_sender_info_via_onebot(group_id, user_id)
-            logger.debug(f"从 OneBot API 获取发送者信息: card={card}, title={title}, role={role}")
+        if (not card or not title) and group_id and platform == "qq":
+            ob_card, ob_title, ob_role = await self._get_qq_sender_info_via_onebot(group_id, user_id)
+            if not card and ob_card:
+                card = ob_card
+            if not title and ob_title:
+                title = ob_title
+            if role == "member" and ob_role != "member":
+                role = ob_role
+            logger.debug(f"从 OneBot API 补充发送者信息: card={card}, title={title}, role={role}")
 
         content = mr_message.message_str or ""
         if not content:
@@ -211,7 +217,7 @@ class MessageProvider:
 
     def _parse_message_chain_to_text(self, chain: list) -> str:
         """
-        将消息链转换为纯文本
+        将消息链转换为纯文本（支持 OneBot11 和 message_recorder 两种格式）
 
         Args:
             chain: 消息链列表
@@ -230,23 +236,111 @@ class MessageProvider:
 
                 if seg_type == "text":
                     text_parts.append(seg_data.get("text", ""))
+                elif seg_type == "Plain":
+                    text_parts.append(segment.get("text", ""))
                 elif seg_type == "image":
                     url = seg_data.get("url", "") or seg_data.get("file", "")
+                    text_parts.append(f"[图片]({url})" if url else "[图片]")
+                elif seg_type == "Image":
+                    url = segment.get("url", "") or segment.get("file", "")
                     text_parts.append(f"[图片]({url})" if url else "[图片]")
                 elif seg_type == "face":
                     name = seg_data.get("name", "") or f"表情{seg_data.get('id', '')}"
                     text_parts.append(f"[{name}]")
+                elif seg_type == "Face":
+                    name = segment.get("name", "") or f"表情{segment.get('id', '')}"
+                    text_parts.append(f"[{name}]")
                 elif seg_type == "mface":
                     url = seg_data.get("url", "")
                     text_parts.append(f"[图片]({url})" if url else f"[{seg_data.get('summary', '表情')}]")
+                elif seg_type == "Mface":
+                    url = segment.get("url", "")
+                    text_parts.append(f"[图片]({url})" if url else f"[{segment.get('summary', '表情')}]")
                 elif seg_type == "record":
+                    text_parts.append("[语音]")
+                elif seg_type == "Record":
                     text_parts.append("[语音]")
                 elif seg_type == "video":
                     text_parts.append("[视频]")
+                elif seg_type == "Video":
+                    text_parts.append("[视频]")
                 elif seg_type == "at":
                     text_parts.append(f"@{seg_data.get('name', '')}")
+                elif seg_type == "At":
+                    text_parts.append(f"@{segment.get('name', '')}")
 
         return "".join(text_parts).strip()
+
+    def _convert_mr_chain_to_onebot(self, chain: list) -> list:
+        """
+        将 message_recorder 消息链格式转换为 OneBot11 格式
+
+        message_recorder 格式: [{"type": "Plain", "text": "hello"}]
+        OneBot11 格式: [{"type": "text", "data": {"text": "hello"}}]
+
+        Args:
+            chain: message_recorder 消息链
+
+        Returns:
+            OneBot11 格式消息链
+        """
+        if not chain:
+            return []
+
+        TYPE_MAP = {
+            "Plain": "text",
+            "Text": "text",
+            "Image": "image",
+            "Face": "face",
+            "Mface": "mface",
+            "Record": "record",
+            "Video": "video",
+            "At": "at",
+            "Reply": "reply",
+            "File": "file",
+        }
+
+        result = []
+        for segment in chain:
+            if not isinstance(segment, dict):
+                continue
+
+            mr_type = segment.get("type", "")
+            ob_type = TYPE_MAP.get(mr_type, mr_type.lower())
+
+            ob_segment = {"type": ob_type, "data": {}}
+
+            if mr_type in ("Plain", "Text"):
+                ob_segment["data"]["text"] = segment.get("text", "")
+            elif mr_type == "Image":
+                ob_segment["data"]["url"] = segment.get("url", "") or segment.get("file", "")
+                ob_segment["data"]["file"] = segment.get("file", "")
+            elif mr_type == "Face":
+                ob_segment["data"]["id"] = segment.get("id", "")
+                ob_segment["data"]["name"] = segment.get("name", "")
+            elif mr_type == "Mface":
+                ob_segment["data"]["url"] = segment.get("url", "")
+                ob_segment["data"]["summary"] = segment.get("summary", "")
+            elif mr_type == "Record":
+                ob_segment["data"]["url"] = segment.get("url", "") or segment.get("file", "")
+            elif mr_type == "Video":
+                ob_segment["data"]["url"] = segment.get("url", "") or segment.get("file", "")
+            elif mr_type == "At":
+                ob_segment["data"]["qq"] = segment.get("qq", "") or segment.get("user_id", "")
+                ob_segment["data"]["name"] = segment.get("name", "")
+            elif mr_type == "Reply":
+                ob_segment["data"]["id"] = segment.get("id", "") or segment.get("message_id", "")
+            elif mr_type == "File":
+                ob_segment["data"]["url"] = segment.get("url", "") or segment.get("file", "")
+                ob_segment["data"]["name"] = segment.get("name", "")
+            else:
+                for key, value in segment.items():
+                    if key != "type":
+                        ob_segment["data"][key] = value
+
+            result.append(ob_segment)
+
+        return result
 
     async def get_message_by_id(
         self,
@@ -271,6 +365,8 @@ class MessageProvider:
                 if mr_msg:
                     render_msg = await self.convert_mr_to_render(mr_msg, group_id)
                     raw = mr_msg.get_raw_message_dict() or {}
+                    mr_chain = mr_msg.get_message_chain_list() or []
+                    ob_chain = self._convert_mr_chain_to_onebot(mr_chain)
 
                     return {
                         "message_id": mr_msg.message_id,
@@ -282,7 +378,7 @@ class MessageProvider:
                             "title": render_msg.title,
                             "role": render_msg.role
                         },
-                        "message": mr_msg.get_message_chain_list() or [],
+                        "message": ob_chain,
                         "time": render_msg.timestamp,
                         "raw_message": raw,
                         "_source": "message_recorder"
@@ -342,6 +438,8 @@ class MessageProvider:
 
                         render_msg = await self.convert_mr_to_render(mr_msg, group_id)
                         raw = mr_msg.get_raw_message_dict() or {}
+                        mr_chain = mr_msg.get_message_chain_list() or []
+                        ob_chain = self._convert_mr_chain_to_onebot(mr_chain)
 
                         messages.append({
                             "message_id": mr_msg.message_id,
@@ -353,7 +451,7 @@ class MessageProvider:
                                 "title": render_msg.title,
                                 "role": render_msg.role
                             },
-                            "message": mr_msg.get_message_chain_list() or [],
+                            "message": ob_chain,
                             "time": render_msg.timestamp,
                             "raw_message": raw,
                             "_source": "message_recorder"
