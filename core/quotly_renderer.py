@@ -95,36 +95,28 @@ class QuotlyRenderer:
         await self._ensure_browser()
         html_content = self._build_html(messages, show_title=show_title, show_time=show_time, show_date=show_date)
         
-        # 使用全局浏览器实例创建新页面
         page = await self._browser.new_page(viewport={"width": 800, "height": 100})
         try:
             await page.set_content(html_content, wait_until="domcontentloaded", timeout=15000)
             
             try:
                 await page.wait_for_function(
-                    """() => document.fonts.ready.then(() => true)""",
-                    timeout=10000
-                )
-            except Exception:
-                pass
-            
-            try:
-                await page.wait_for_function(
                     """() => {
                         const images = document.querySelectorAll('img');
+                        if (images.length === 0) return true;
                         return Array.from(images).every(img => img.complete);
                     }""",
-                    timeout=20000
+                    timeout=8000
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"图片加载等待超时，继续渲染: {e}")
             
-            # 使用 full_page=True 自动适应任意高度
             screenshot = await page.screenshot(
                 full_page=True,
                 type="png",
                 animations="disabled",
-                caret="initial"
+                caret="initial",
+                timeout=15000
             )
             return screenshot
         finally:
@@ -234,10 +226,15 @@ class QuotlyRenderer:
 <html>
 <head>
     <meta charset="UTF-8">
-    <link rel="preconnect" href="https://cdn.jsdelivr.net">
-    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet" media="print" onload="this.media='all'">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet" media="print" onload="this.media='all'">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript>
+        <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet">
+    </noscript>
     <style>
         * {{
             margin: 0;
@@ -246,7 +243,7 @@ class QuotlyRenderer:
         }}
 
         body {{
-            font-family: 'HarmonyOS Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'HarmonyOS Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
             background: #ebebf0;
             padding: 0;
             display: inline-flex;
