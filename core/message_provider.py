@@ -41,17 +41,22 @@ class MessageProvider:
             message_recorder API 实例，如果不可用则返回 None
         """
         try:
-            recorder = self.context.get_registered_star("astrbot_plugin_message_recorder")
-            logger.debug(f"get_registered_star 返回: {recorder}, 类型: {type(recorder)}")
+            star_meta = self.context.get_registered_star("astrbot_plugin_message_recorder")
+            logger.debug(f"get_registered_star 返回: {star_meta}, 类型: {type(star_meta)}")
             
-            if recorder is None:
+            if star_meta is None:
                 logger.debug("message_recorder 插件未注册，可能未安装或未启用")
                 return None
             
-            logger.debug(f"hasattr(recorder, 'get_api'): {hasattr(recorder, 'get_api')}")
+            plugin_instance = getattr(star_meta, "star_cls", None)
+            logger.debug(f"star_cls: {plugin_instance}, 类型: {type(plugin_instance)}")
             
-            if hasattr(recorder, "get_api"):
-                api = recorder.get_api()
+            if plugin_instance is None:
+                logger.debug("message_recorder 插件实例为 None，可能未激活")
+                return None
+            
+            if hasattr(plugin_instance, "get_api"):
+                api = plugin_instance.get_api()
                 logger.debug(f"get_api() 返回: {api}, 类型: {type(api)}")
                 
                 if api:
@@ -61,7 +66,7 @@ class MessageProvider:
                 else:
                     logger.debug("get_api() 返回 None，插件可能尚未完成初始化")
             else:
-                logger.debug("recorder 没有 get_api 方法")
+                logger.debug("插件实例没有 get_api 方法")
                 
         except Exception as e:
             logger.warning(f"获取 message_recorder API 失败: {e}")
