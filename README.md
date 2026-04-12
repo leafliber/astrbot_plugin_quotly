@@ -46,6 +46,18 @@ playwright install --with-deps chromium
 
 > 如果 AstrBot 运行在 Docker 容器中，请确保容器内已安装 Chromium 浏览器，可通过exec指令安装playwright依赖。
 
+### 推荐安装消息记录器
+
+🌟 **强烈推荐**安装 [astrbot_plugin_message_recorder](https://github.com/leafliber/astrbot_plugin_message_recorder) 插件以获得最佳体验：
+
+- **更稳定的历史消息获取** - 无依赖 OneBot API 的历史消息接口
+- **跨平台支持** - 未来可支持 Telegram、Discord 等平台
+- **完整消息信息** - 保存原始消息对象，包含群名片、头衔等完整信息
+
+安装后请在 message_recorder 插件配置中启用 `save_raw_message: true`，以保存完整的消息信息。
+
+> 如果未安装 message_recorder 插件，Quotly 会自动降级使用 OneBot API 获取消息，功能不受影响但仅支持 QQ 平台。
+
 ### 最低配置要求
 
 由于插件使用 Playwright 进行浏览器渲染，对系统资源有一定要求：

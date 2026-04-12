@@ -25,6 +25,7 @@ from core.onebot_client import OneBotClient
 from core.message_parser import MessageParser
 from core.quotly_renderer import QuotlyRenderer
 from core.database import QuotlyDatabase
+from core.message_provider import MessageProvider
 from utils.image_hash import compute_phash
 
 
@@ -42,6 +43,8 @@ class QuotlyPlugin(Star):
 
         plugin_name = getattr(self, 'name', 'quotly')
         self.db = QuotlyDatabase(plugin_name=plugin_name)
+
+        self.message_provider = MessageProvider(context, self.onebot, self.parser)
 
         self.q_trigger = ""
         self.qsearch_trigger = ""
@@ -266,141 +269,38 @@ class QuotlyPlugin(Star):
 
         logger.debug(f"解析结果: count={count}, show_title={show_title}, show_time={show_time}, show_date={show_date}, filter_user_id={filter_user_id}, pick_indices={pick_indices}")
 
-        # 获取被回复消息的内容
-        msg_data = await self.onebot.get_msg(reply_id)
+        group_id_str = getattr(event.message_obj, 'group_id', None)
+        group_id = None
+        if group_id_str:
+            try:
+                group_id = int(group_id_str)
+            except (ValueError, TypeError):
+                pass
 
-        if msg_data is None:
+        messages_data, error_msg = await self.message_provider.get_messages_for_quote(
+            reply_id=reply_id,
+            group_id=group_id,
+            count=count,
+            filter_user_id=filter_user_id,
+            pick_indices=pick_indices
+        )
+
+        if error_msg:
+            yield event.plain_result(error_msg)
+            return
+
+        if not messages_data:
             yield event.plain_result("无法获取消息内容，请确认消息是否存在")
             return
 
-        if filter_user_id is True:
-            sender = msg_data.get("sender", {})
-            filter_user_id = sender.get("user_id")
-            if not filter_user_id:
-                yield event.plain_result("无法获取被回复消息的发送者信息")
-                return
-            logger.debug(f"--user 未指定QQ号，自动使用被回复消息发送者: {filter_user_id}")
+        source = messages_data[0].get("_source", "unknown")
+        logger.info(f"消息获取来源: {source}, 消息数量: {len(messages_data)}")
 
-        # 获取群号（用于后续获取群成员信息）
-        # OneBot API 返回的 group_id 是整数，AstrBot 内部使用字符串
-        # 统一转换为整数，因为 OneBot API 需要整数参数
-        group_id = msg_data.get("group_id")
-        if not group_id:
-            group_id_str = getattr(event.message_obj, 'group_id', None)
-            if group_id_str:
-                try:
-                    group_id = int(group_id_str)
-                except (ValueError, TypeError):
-                    group_id = None
-
-        # 获取消息序号（用于获取历史消息）
-        message_seq = msg_data.get("message_seq", 0)
-        reply_time = msg_data.get("time", 0)
-
-        # 构建消息列表
-        messages_data = [msg_data]
-
-        need_more = count > 1 or (pick_indices and max(pick_indices) > 1)
-        if pick_indices:
-            count = len(pick_indices)
-
-        logger.debug(f"准备获取消息: count={count}, group_id={group_id}, message_seq={message_seq}")
-
-        if need_more and group_id:
-            if pick_indices:
-                fetch_count = 100
-            else:
-                fetch_count = count
-                if filter_user_id:
-                    fetch_count = min(count * 5, 100)
-            fetch_count = min(fetch_count, 100)
-            
-            history = await self.onebot.get_history(group_id, 0, fetch_count)
-            logger.debug(f"获取最新消息: group_id={group_id}, count={fetch_count}")
-            
-            if history and isinstance(history, dict):
-                messages_history = history.get("messages", [])
-            elif history and isinstance(history, list):
-                messages_history = history
-            else:
-                messages_history = []
-
-            logger.debug(f"获取到的消息数量: {len(messages_history)}")
-
-            if messages_history:
-                # 按 time 排序（从旧到新）
-                messages_history.sort(key=lambda x: x.get("time", 0))
-                
-                # 找到被回复消息的位置
-                reply_idx = -1
-                for i, msg in enumerate(messages_history):
-                    msg_id = msg.get("message_id")
-                    if isinstance(msg_id, str):
-                        try:
-                            msg_id = int(msg_id)
-                        except (ValueError, TypeError):
-                            continue
-                    if msg_id == reply_id:
-                        reply_idx = i
-                        break
-                
-                logger.debug(f"被回复消息位置: reply_idx={reply_idx}")
-                
-                # 获取被回复消息之后的消息（更新的消息）
-                if reply_idx >= 0:
-                    newer_messages = messages_history[reply_idx + 1:]
-                else:
-                    newer_messages = [m for m in messages_history if m.get("time", 0) > reply_time]
-                
-                logger.debug(f"更新的消息数量: {len(newer_messages)}")
-                
-                # 按 time 排序（从旧到新）
-                newer_messages.sort(key=lambda x: x.get("time", 0))
-                
-                # 取需要的数量
-                need_count = count - 1
-                if pick_indices:
-                    need_count = max(pick_indices) - 1
-                if filter_user_id:
-                    need_count = len(newer_messages)
-                if len(newer_messages) > need_count:
-                    newer_messages = newer_messages[:need_count]
-                
-                logger.debug(f"最终选取的更新消息数量: {len(newer_messages)}")
-                
-                # 构建消息列表：被回复消息 + 更新的消息
-                messages_data = [msg_data]
-                for msg in newer_messages:
-                    messages_data.append(msg)
-                    
-        logger.debug(f"总消息数量: {len(messages_data)}")
-
-        if pick_indices:
-            max_idx = max(pick_indices)
-            if max_idx > len(messages_data):
-                yield event.plain_result(f"指定的消息序号 {max_idx} 超出范围，当前最多可获取 {len(messages_data)} 条消息")
-                return
-            
-            picked_messages = []
-            for idx in pick_indices:
-                if 1 <= idx <= len(messages_data):
-                    picked_messages.append(messages_data[idx - 1])
-            messages_data = picked_messages
-            logger.debug(f"按序号 {pick_indices} 选取后消息数量: {len(messages_data)}")
-
-            if not messages_data:
-                yield event.plain_result("未找到指定的消息")
-                return
-
-        if filter_user_id:
-            messages_data = [m for m in messages_data if m.get("sender", {}).get("user_id") == filter_user_id]
-            if count > 1 and len(messages_data) > count:
-                messages_data = messages_data[-count:]
-            logger.debug(f"按用户 {filter_user_id} 过滤后消息数量: {len(messages_data)}")
-
-            if not messages_data:
-                yield event.plain_result(f"未找到该用户（QQ: {filter_user_id}）的消息")
-                return
+        if group_id is None and messages_data:
+            first_msg = messages_data[0]
+            gid = first_msg.get("group_id")
+            if gid:
+                group_id = int(gid) if isinstance(gid, str) else gid
 
         # 渲染消息列表
         try:
@@ -427,7 +327,16 @@ class QuotlyPlugin(Star):
                         pass
                 
                 sender = msg_data_item.get("sender", {})
-                user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
+                
+                if isinstance(sender, dict) and "card" in sender and "title" in sender and "role" in sender:
+                    user_id = sender.get("user_id", 0)
+                    nickname = sender.get("nickname", "")
+                    card = sender.get("card", "")
+                    title = sender.get("title", "")
+                    role = sender.get("role", "member")
+                    logger.debug(f"使用 sender 中的完整信息: card={card}, title={title}, role={role}")
+                else:
+                    user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
                 
                 msg_content = msg_data_item.get("message", [])
                 logger.debug(f"解析消息内容: message 类型={type(msg_content)}, 内容={msg_content}")
@@ -447,22 +356,32 @@ class QuotlyPlugin(Star):
                 if not content:
                     content = "[仅包含媒体消息]"
 
-                if not title and group_id and user_id:
-                    member_info = await self.onebot.get_group_member_info(group_id, user_id)
-                    if member_info:
-                        title = member_info.get("title", "")
+                if not title and group_id and user_id and self.onebot:
+                    try:
+                        member_info = await self.onebot.get_group_member_info(group_id, user_id)
+                        if member_info:
+                            title = member_info.get("title", "")
+                            if not card:
+                                card = member_info.get("card", "")
+                            if role == "member":
+                                role = member_info.get("role", "member")
+                    except Exception as e:
+                        logger.debug(f"获取群成员信息失败: {e}")
 
-                # 处理消息内的回复
                 reply_info = None
                 if inner_reply_id:
                     try:
-                        reply_msg = await self.onebot.get_msg(inner_reply_id)
-                        if reply_msg:
-                            reply_sender = reply_msg.get("sender", {})
-                            reply_user_id, reply_nickname, reply_card, _, _ = self.parser.parse_sender_info(reply_sender)
-                            reply_content, _ = self.parser.parse_message_content(reply_msg.get("message", []))
+                        reply_msg_data = await self.message_provider.get_message_by_id(inner_reply_id, group_id)
+                        if reply_msg_data:
+                            reply_sender = reply_msg_data.get("sender", {})
+                            if isinstance(reply_sender, dict) and "card" in reply_sender:
+                                reply_nickname = reply_sender.get("nickname", "")
+                                reply_card = reply_sender.get("card", "")
+                            else:
+                                _, reply_nickname, reply_card, _, _ = self.parser.parse_sender_info(reply_sender)
                             
-                            # 截取回复内容预览（最多50字符）
+                            reply_content, _ = self.parser.parse_message_content(reply_msg_data.get("message", []))
+                            
                             if len(reply_content) > 50:
                                 reply_content = reply_content[:50] + "..."
                             
@@ -481,7 +400,7 @@ class QuotlyPlugin(Star):
                     "user_id": user_id,
                     "content": content,
                     "time_str": time_str,
-                    "avatar_url": self.onebot.get_avatar_url(user_id),
+                    "avatar_url": self.message_provider._get_avatar_url(user_id),
                     "reply_info": reply_info
                 })
 
@@ -513,7 +432,16 @@ class QuotlyPlugin(Star):
             storage_messages = []
             for i, msg_data_item in enumerate(messages_data):
                 sender = msg_data_item.get("sender", {})
-                user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
+                
+                if isinstance(sender, dict) and "card" in sender and "title" in sender and "role" in sender:
+                    user_id = sender.get("user_id", 0)
+                    nickname = sender.get("nickname", "")
+                    card = sender.get("card", "")
+                    title = sender.get("title", "")
+                    role = sender.get("role", "member")
+                else:
+                    user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
+                
                 content, _ = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
                 original_time = msg_data_item.get("time", 0)
@@ -773,7 +701,7 @@ class QuotlyPlugin(Star):
             return
 
         try:
-            msg_data = await self.onebot.get_msg(reply_id)
+            msg_data = await self.message_provider.get_message_by_id(reply_id)
 
             if msg_data is None:
                 yield event.plain_result("无法获取消息内容，请确认消息是否存在")
