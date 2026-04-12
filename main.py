@@ -192,7 +192,7 @@ class QuotlyPlugin(Star):
     async def quote_command(self, event: AstrMessageEvent):
         """
         将消息渲染为精美的引用图片
-        用法: /q [数量] [--title 0|1] [--time 0|1] [--date 0|1]
+        用法: /q [数量] [--title 0|1] [--time 0|1] [--date 0|1] [--user [QQ号]] [--pick 序号列表]
         """
         message_str = event.message_str.strip()
         args = re.sub(r'^q\s*', '', message_str)
@@ -235,7 +235,36 @@ class QuotlyPlugin(Star):
         if date_match:
             show_date = date_match.group(1) == '1'
 
-        logger.debug(f"解析结果: count={count}, show_title={show_title}, show_time={show_time}, show_date={show_date}")
+        filter_user_id = None
+        user_match = re.search(r'--user(?:\s+(\d+))?', args)
+        if user_match:
+            if user_match.group(1):
+                filter_user_id = int(user_match.group(1))
+            else:
+                filter_user_id = True
+
+        pick_indices = None
+        pick_match = re.search(r'--pick\s+([0-9,\-\s]+)', args)
+        if pick_match:
+            pick_str = pick_match.group(1)
+            pick_indices = set()
+            for part in pick_str.split(','):
+                part = part.strip()
+                if '-' in part:
+                    try:
+                        start, end = part.split('-', 1)
+                        start, end = int(start.strip()), int(end.strip())
+                        pick_indices.update(range(start, end + 1))
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        pick_indices.add(int(part))
+                    except ValueError:
+                        pass
+            pick_indices = sorted(pick_indices)
+
+        logger.debug(f"解析结果: count={count}, show_title={show_title}, show_time={show_time}, show_date={show_date}, filter_user_id={filter_user_id}, pick_indices={pick_indices}")
 
         # 获取被回复消息的内容
         msg_data = await self.onebot.get_msg(reply_id)
@@ -243,6 +272,14 @@ class QuotlyPlugin(Star):
         if msg_data is None:
             yield event.plain_result("无法获取消息内容，请确认消息是否存在")
             return
+
+        if filter_user_id is True:
+            sender = msg_data.get("sender", {})
+            filter_user_id = sender.get("user_id")
+            if not filter_user_id:
+                yield event.plain_result("无法获取被回复消息的发送者信息")
+                return
+            logger.debug(f"--user 未指定QQ号，自动使用被回复消息发送者: {filter_user_id}")
 
         # 获取群号（用于后续获取群成员信息）
         # OneBot API 返回的 group_id 是整数，AstrBot 内部使用字符串
@@ -258,18 +295,27 @@ class QuotlyPlugin(Star):
 
         # 获取消息序号（用于获取历史消息）
         message_seq = msg_data.get("message_seq", 0)
+        reply_time = msg_data.get("time", 0)
 
         # 构建消息列表
         messages_data = [msg_data]
 
-        logger.debug(f"准备获取历史消息: count={count}, group_id={group_id}, message_seq={message_seq}")
+        need_more = count > 1 or (pick_indices and max(pick_indices) > 1)
+        if pick_indices:
+            count = len(pick_indices)
 
-        # 如果需要多条消息，尝试获取历史
-        if count > 1 and group_id:
-            logger.debug(f"尝试获取历史消息: group_id={group_id}, message_seq={message_seq}, count={count}")
-            # 使用 message_seq 获取历史消息（从这条消息开始往前获取）
-            history = await self.onebot.get_history(group_id, message_seq, count)
-            logger.debug(f"历史消息返回类型: {type(history)}, 内容: {history if not history or len(str(history)) < 500 else str(history)[:500] + '...'}")
+        logger.debug(f"准备获取消息: count={count}, group_id={group_id}, message_seq={message_seq}")
+
+        if need_more and group_id:
+            fetch_count = count
+            if filter_user_id:
+                fetch_count = min(count * 5, 100)
+            if pick_indices:
+                fetch_count = max(fetch_count, max(pick_indices))
+            fetch_count = min(fetch_count, 100)
+            
+            history = await self.onebot.get_history(group_id, 0, fetch_count)
+            logger.debug(f"获取最新消息: group_id={group_id}, count={fetch_count}")
             
             if history and isinstance(history, dict):
                 messages_history = history.get("messages", [])
@@ -278,50 +324,81 @@ class QuotlyPlugin(Star):
             else:
                 messages_history = []
 
-            logger.debug(f"解析后的历史消息数量: {len(messages_history)}")
+            logger.debug(f"获取到的消息数量: {len(messages_history)}")
 
             if messages_history:
-                # 过滤并排序消息
-                # 使用 time 字段排序（从旧到新）
-                filtered_messages = []
-                for msg in messages_history:
+                # 按 time 排序（从旧到新）
+                messages_history.sort(key=lambda x: x.get("time", 0))
+                
+                # 找到被回复消息的位置
+                reply_idx = -1
+                for i, msg in enumerate(messages_history):
                     msg_id = msg.get("message_id")
-                    msg_time = msg.get("time", 0)
-                    
-                    # 确保 message_id 是整数
                     if isinstance(msg_id, str):
                         try:
                             msg_id = int(msg_id)
                         except (ValueError, TypeError):
                             continue
-                    
-                    logger.debug(f"消息 ID: {msg_id}, time: {msg_time}, reply_id: {reply_id}")
-                    
-                    # 只保留 message_id != reply_id 的消息（排除被回复的消息本身）
-                    if msg_id is not None and msg_id != reply_id:
-                        filtered_messages.append((msg_time, msg_id, msg))
+                    if msg_id == reply_id:
+                        reply_idx = i
+                        break
                 
-                logger.debug(f"过滤后的消息数量: {len(filtered_messages)}")
+                logger.debug(f"被回复消息位置: reply_idx={reply_idx}")
+                
+                # 获取被回复消息之后的消息（更新的消息）
+                if reply_idx >= 0:
+                    newer_messages = messages_history[reply_idx + 1:]
+                else:
+                    # 如果没找到，使用 time 来判断
+                    newer_messages = [m for m in messages_history if m.get("time", 0) > reply_time]
+                
+                logger.debug(f"更新的消息数量: {len(newer_messages)}")
                 
                 # 按 time 排序（从旧到新）
-                filtered_messages.sort(key=lambda x: x[0])
+                newer_messages.sort(key=lambda x: x.get("time", 0))
                 
-                # 取最后 (count-1) 条消息（最接近被回复消息的）
+                # 取需要的数量
                 need_count = count - 1
-                if len(filtered_messages) > need_count:
-                    filtered_messages = filtered_messages[-need_count:]
+                if filter_user_id or pick_indices:
+                    need_count = len(newer_messages)
+                if len(newer_messages) > need_count:
+                    newer_messages = newer_messages[:need_count]
                 
-                logger.debug(f"最终选取的历史消息数量: {len(filtered_messages)}")
+                logger.debug(f"最终选取的更新消息数量: {len(newer_messages)}")
                 
-                # 清空消息列表，按时间顺序重新添加
-                messages_data = []
-                # 先添加被回复的消息（消息1）
-                messages_data.append(msg_data)
-                # 然后添加历史消息（消息2 3 4 5）
-                for _, _, msg in filtered_messages:
+                # 构建消息列表：被回复消息 + 更新的消息
+                messages_data = [msg_data]
+                for msg in newer_messages:
                     messages_data.append(msg)
                     
         logger.debug(f"总消息数量: {len(messages_data)}")
+
+        if pick_indices:
+            max_idx = max(pick_indices)
+            if max_idx > len(messages_data):
+                yield event.plain_result(f"指定的消息序号 {max_idx} 超出范围，当前最多可获取 {len(messages_data)} 条消息")
+                return
+            
+            picked_messages = []
+            for idx in pick_indices:
+                if 1 <= idx <= len(messages_data):
+                    picked_messages.append(messages_data[idx - 1])
+            messages_data = picked_messages
+            logger.debug(f"按序号 {pick_indices} 选取后消息数量: {len(messages_data)}")
+
+            if not messages_data:
+                yield event.plain_result("未找到指定的消息")
+                return
+
+        if filter_user_id:
+            messages_data = [m for m in messages_data if m.get("sender", {}).get("user_id") == filter_user_id]
+            if count > 1 and len(messages_data) > count:
+                messages_data = messages_data[-count:]
+            logger.debug(f"按用户 {filter_user_id} 过滤后消息数量: {len(messages_data)}")
+
+            if not messages_data:
+                yield event.plain_result(f"未找到该用户（QQ: {filter_user_id}）的消息")
+                return
 
         # 渲染消息列表
         try:

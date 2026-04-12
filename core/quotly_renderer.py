@@ -101,11 +101,17 @@ class QuotlyRenderer:
         # 使用全局浏览器实例创建新页面
         page = await self._browser.new_page(viewport={"width": 800, "height": 100})
         try:
-            await page.set_content(html_content)
-            # 等待 DOM 加载完成
-            await page.wait_for_load_state("domcontentloaded", timeout=5000)
-            # 等待字体和图片加载，以及 JavaScript 执行
-            await page.wait_for_timeout(1000)
+            await page.set_content(html_content, wait_until="domcontentloaded", timeout=5000)
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const images = document.querySelectorAll('img');
+                        return Array.from(images).every(img => img.complete);
+                    }""",
+                    timeout=5000
+                )
+            except Exception:
+                pass
             
             # 使用 full_page=True 自动适应任意高度
             screenshot = await page.screenshot(
