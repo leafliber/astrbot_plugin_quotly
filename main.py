@@ -114,17 +114,13 @@ class QuotlyPlugin(Star):
             OCR识别结果文本
         """
         try:
-            from astrbot.api.provider import ProviderRequest
-            
-            request = ProviderRequest(
+            result = await self.context.llm.chat(
                 prompt="请识别这张图片中的所有文字内容，只输出识别到的文字，不要添加任何解释或说明。如果图片中没有文字，请输出：[无文字]",
                 image_urls=[image_url]
             )
             
-            result = await self.context.call_llm(request)
-            
-            if result and result.completion_text:
-                ocr_text = result.completion_text.strip()
+            if result:
+                ocr_text = result.strip()
                 if ocr_text and ocr_text != "[无文字]":
                     logger.debug(f"OCR识别成功: {ocr_text[:100]}...")
                     return ocr_text
