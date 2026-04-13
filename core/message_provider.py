@@ -396,19 +396,27 @@ class MessageProvider:
             try:
                 ref_msg = await mr_api.get_by_platform_message_id(str(reference_message_id))
                 if ref_msg:
-                    context = await mr_api.get_context(
-                        message_id=ref_msg.id,
-                        before=0,
-                        after=count * 2
-                    )
+                    ref_timestamp = ref_msg.timestamp
+                    
+                    if filter_user_id:
+                        mr_messages = await mr_api.query(
+                            group_id=str(group_id),
+                            sender_id=str(filter_user_id),
+                            start_time=ref_timestamp + 1,
+                            limit=count,
+                            order="asc"
+                        )
+                        logger.debug(f"使用高级查询: sender_id={filter_user_id}, start_time={ref_timestamp}, limit={count}")
+                    else:
+                        context = await mr_api.get_context(
+                            message_id=ref_msg.id,
+                            before=0,
+                            after=count
+                        )
+                        mr_messages = context.get("after", [])
 
-                    after_messages = context.get("after", [])
                     messages = []
-
-                    for mr_msg in after_messages:
-                        if filter_user_id and int(mr_msg.sender_id) != filter_user_id:
-                            continue
-
+                    for mr_msg in mr_messages:
                         render_msg = await self.convert_mr_to_render(mr_msg, group_id)
                         raw = mr_msg.get_raw_message_dict() or {}
                         mr_chain = mr_msg.get_message_chain_list() or []
@@ -429,9 +437,6 @@ class MessageProvider:
                             "raw_message": raw,
                             "_source": "onebot"
                         })
-
-                        if len(messages) >= count:
-                            break
 
                     logger.info(f"通过 message_recorder 获取到 {len(messages)} 条消息")
                     return messages
@@ -519,8 +524,19 @@ class MessageProvider:
         if pick_indices:
             count = len(pick_indices)
 
+        used_advanced_query = False
         if need_more and group_id:
-            fetch_count = 100 if pick_indices else (count * 5 if filter_user_id else count - 1)
+            mr_api = await self.get_message_recorder_api()
+            
+            if pick_indices:
+                fetch_count = 100
+            elif filter_user_id and mr_api:
+                fetch_count = count - 1
+                used_advanced_query = True
+            elif filter_user_id:
+                fetch_count = count * 5
+            else:
+                fetch_count = count - 1
             fetch_count = min(fetch_count, 100)
 
             newer_messages = await self.get_messages_after(
@@ -548,13 +564,13 @@ class MessageProvider:
             if not messages_data:
                 return [], "未找到指定的消息"
 
-        if filter_user_id and not pick_indices:
+        if filter_user_id and not pick_indices and not used_advanced_query:
             messages_data = [
                 m for m in messages_data
                 if m.get("sender", {}).get("user_id") == filter_user_id
             ]
             if count > 1 and len(messages_data) > count:
-                messages_data = messages_data[-count:]
+                messages_data = [messages_data[0]] + messages_data[-(count - 1):]
 
             if not messages_data:
                 return [], f"未找到该用户（QQ: {filter_user_id}）的消息"
