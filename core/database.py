@@ -152,6 +152,57 @@ class QuotlyDatabase:
         logger.debug(f"保存 Quotly 记录: record_id={record_id}, hash={image_hash}")
         return record_id
 
+    async def update_ocr_text(self, image_hash: str, messages: List[Dict[str, Any]]) -> bool:
+        """
+        更新记录的 OCR 文本
+        
+        Args:
+            image_hash: 图片 hash 值
+            messages: 更新后的消息列表（包含 ocr_text）
+            
+        Returns:
+            是否更新成功
+        """
+        conn = await self._get_conn()
+        
+        cursor = await conn.execute(
+            "SELECT id FROM quotly_records WHERE image_hash = ?",
+            (image_hash,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            logger.warning(f"未找到记录: hash={image_hash}")
+            return False
+        
+        record_id = row['id']
+        
+        async with self._lock:
+            for seq, msg in enumerate(messages):
+                ocr_text = msg.get('ocr_text', '')
+                if ocr_text:
+                    await conn.execute(
+                        "UPDATE quotly_messages SET ocr_text = ? WHERE record_id = ? AND seq = ?",
+                        (ocr_text, record_id, seq)
+                    )
+                    
+                    await conn.execute(
+                        "DELETE FROM quotly_search WHERE record_id = ?",
+                        (record_id,)
+                    )
+                    
+                    for m_idx, m in enumerate(messages):
+                        await conn.execute(
+                            "INSERT INTO quotly_search (record_id, nickname, card, title, content) VALUES (?, ?, ?, ?, ?)",
+                            (record_id, m.get('nickname', ''), m.get('card', ''), m.get('title', ''),
+                             m.get('content', '') + (' ' + m.get('ocr_text', '') if m.get('ocr_text') else ''))
+                        )
+            
+            await conn.commit()
+        
+        logger.debug(f"更新 OCR 文本: record_id={record_id}")
+        return True
+
     async def search_by_keyword(
         self,
         keyword: str,

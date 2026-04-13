@@ -6,6 +6,8 @@ QQ 聊天气泡样式 1:1 复刻
 import asyncio
 import base64
 import pathlib
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional
 from astrbot.api import logger
@@ -23,6 +25,34 @@ FONT_DOWNLOAD_URLS = {
     "HarmonyOS_Sans_SC_Bold.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Bold.ttf",
 }
 
+PAGE_POOL_SIZE = 3
+AVATAR_CACHE_SIZE = 200
+
+
+class LRUCache:
+    """简单的 LRU 缓存实现"""
+    
+    def __init__(self, max_size: int):
+        self.max_size = max_size
+        self.cache: OrderedDict = OrderedDict()
+        self._lock = asyncio.Lock()
+    
+    async def get(self, key: str) -> Optional[bytes]:
+        async with self._lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                return self.cache[key]
+            return None
+    
+    async def set(self, key: str, value: bytes):
+        async with self._lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            else:
+                if len(self.cache) >= self.max_size:
+                    self.cache.popitem(last=False)
+                self.cache[key] = value
+
 
 class QuotlyRenderer:
     """引用消息渲染器"""
@@ -32,6 +62,7 @@ class QuotlyRenderer:
     _font_base64_cache: Optional[str] = None
     _fonts_checked = False
     _font_lock = asyncio.Lock()
+    _avatar_cache: Optional[LRUCache] = None
 
     def __init__(self):
         """
@@ -41,6 +72,9 @@ class QuotlyRenderer:
         self._browser = None
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._page_pool: asyncio.Queue = asyncio.Queue(maxsize=PAGE_POOL_SIZE)
+        self._page_pool_initialized = False
+        self._page_pool_lock = asyncio.Lock()
         
         if HAS_ASTRBOT_PATH:
             data_path = get_astrbot_data_path()
@@ -51,6 +85,9 @@ class QuotlyRenderer:
         
         self._fonts_dir = data_dir / "fonts"
         self._fonts_dir.mkdir(parents=True, exist_ok=True)
+        
+        if QuotlyRenderer._avatar_cache is None:
+            QuotlyRenderer._avatar_cache = LRUCache(AVATAR_CACHE_SIZE)
         
         QuotlyRenderer._instance_count += 1
         logger.debug(f"QuotlyRenderer 实例创建，当前实例数: {QuotlyRenderer._instance_count}")
@@ -76,6 +113,7 @@ class QuotlyRenderer:
             if not missing_fonts:
                 logger.debug("所有字体文件已存在")
                 QuotlyRenderer._fonts_checked = True
+                self._get_font_base64()
                 return
             
             logger.info(f"正在下载缺失的字体文件: {missing_fonts}")
@@ -84,21 +122,12 @@ class QuotlyRenderer:
             downloaded = False
             try:
                 async with aiohttp.ClientSession() as session:
+                    download_tasks = []
                     for font_file in missing_fonts:
-                        url = FONT_DOWNLOAD_URLS[font_file]
-                        font_path = self._fonts_dir / font_file
-                        try:
-                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                                if resp.status == 200:
-                                    font_data = await resp.read()
-                                    with open(font_path, "wb") as f:
-                                        f.write(font_data)
-                                    logger.info(f"字体下载成功: {font_file}")
-                                    downloaded = True
-                                else:
-                                    logger.warning(f"字体下载失败: {font_file}, HTTP {resp.status}")
-                        except Exception as e:
-                            logger.warning(f"字体下载失败: {font_file}, 错误: {e}")
+                        download_tasks.append(self._download_font(session, font_file))
+                    
+                    results = await asyncio.gather(*download_tasks, return_exceptions=True)
+                    downloaded = any(r for r in results if r is True)
             except Exception as e:
                 logger.error(f"字体下载过程出错: {e}")
             
@@ -108,6 +137,26 @@ class QuotlyRenderer:
             all_exist = all((self._fonts_dir / f).exists() for f in FONT_DOWNLOAD_URLS)
             if all_exist:
                 QuotlyRenderer._fonts_checked = True
+                self._get_font_base64()
+                logger.info("字体加载完成")
+
+    async def _download_font(self, session, font_file: str) -> bool:
+        """下载单个字体文件"""
+        url = FONT_DOWNLOAD_URLS[font_file]
+        font_path = self._fonts_dir / font_file
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                if resp.status == 200:
+                    font_data = await resp.read()
+                    with open(font_path, "wb") as f:
+                        f.write(font_data)
+                    logger.info(f"字体下载成功: {font_file}")
+                    return True
+                else:
+                    logger.warning(f"字体下载失败: {font_file}, HTTP {resp.status}")
+        except Exception as e:
+            logger.warning(f"字体下载失败: {font_file}, 错误: {e}")
+        return False
 
     def _get_font_base64(self) -> Optional[str]:
         """
@@ -170,17 +219,68 @@ class QuotlyRenderer:
                             '--disable-gpu-compositing',
                             '--disable-software-rasterizer',
                             '--allow-file-access-from-files',
+                            '--disable-dev-shm-usage',
+                            '--no-sandbox',
+                            '--disable-setuid-sandbox',
                         ]
                     )
                     self._initialized = True
                     logger.debug("浏览器实例已启动")
+                    
+                    await self._init_page_pool()
                 except Exception as e:
                     logger.error(f"启动浏览器实例失败: {e}")
                     raise
 
+    async def _init_page_pool(self):
+        """初始化页面池"""
+        async with self._page_pool_lock:
+            if self._page_pool_initialized:
+                return
+            
+            logger.debug(f"初始化页面池，大小: {PAGE_POOL_SIZE}")
+            for i in range(PAGE_POOL_SIZE):
+                try:
+                    page = await self._browser.new_page(viewport={"width": 800, "height": 100})
+                    await self._page_pool.put(page)
+                except Exception as e:
+                    logger.warning(f"创建页面 {i} 失败: {e}")
+            
+            self._page_pool_initialized = True
+            logger.debug("页面池初始化完成")
+
+    async def _get_page(self):
+        """从页面池获取一个页面"""
+        try:
+            page = await asyncio.wait_for(self._page_pool.get(), timeout=5.0)
+            return page
+        except asyncio.TimeoutError:
+            logger.debug("页面池为空，创建新页面")
+            return await self._browser.new_page(viewport={"width": 800, "height": 100})
+
+    async def _return_page(self, page):
+        """将页面返回到页面池"""
+        try:
+            await page.goto("about:blank", timeout=2000)
+            await self._page_pool.put(page)
+        except Exception as e:
+            logger.debug(f"页面返回池失败，关闭页面: {e}")
+            try:
+                await page.close()
+            except:
+                pass
+
     async def cleanup(self):
         """清理浏览器实例"""
         async with self._lock:
+            while not self._page_pool.empty():
+                try:
+                    page = self._page_pool.get_nowait()
+                    await page.close()
+                except:
+                    pass
+            self._page_pool_initialized = False
+            
             if self._browser is not None:
                 logger.debug("关闭浏览器实例...")
                 try:
@@ -196,7 +296,6 @@ class QuotlyRenderer:
                     self._playwright = None
                     self._initialized = False
         
-        # 减少实例计数
         QuotlyRenderer._instance_count = max(0, QuotlyRenderer._instance_count - 1)
         logger.debug(f"QuotlyRenderer 实例清理，当前实例数: {QuotlyRenderer._instance_count}")
 
@@ -221,13 +320,26 @@ class QuotlyRenderer:
         Returns:
             PNG 格式的字节数据
         """
-        asyncio.create_task(self.ensure_fonts())
+        start_time = time.time()
+        
         await self._ensure_browser()
+        
+        avatar_urls = set()
+        for msg in messages:
+            if msg.get('type') != 'date_separator':
+                avatar_url = msg.get('avatar_url', '')
+                if avatar_url:
+                    avatar_urls.add(avatar_url)
+        
+        if avatar_urls:
+            preload_tasks = [self._preload_avatar(url) for url in avatar_urls]
+            await asyncio.gather(*preload_tasks, return_exceptions=True)
+        
         html_content = self._build_html(messages, show_title=show_title, show_time=show_time, show_date=show_date)
         
-        page = await self._browser.new_page(viewport={"width": 800, "height": 100})
+        page = await self._get_page()
         try:
-            await page.set_content(html_content, wait_until="domcontentloaded", timeout=15000)
+            await page.set_content(html_content, wait_until="domcontentloaded", timeout=10000)
             
             try:
                 await page.wait_for_function(
@@ -236,7 +348,7 @@ class QuotlyRenderer:
                         if (images.length === 0) return true;
                         return Array.from(images).every(img => img.complete);
                     }""",
-                    timeout=8000
+                    timeout=3000
                 )
             except Exception as e:
                 logger.debug(f"图片加载等待超时，继续渲染: {e}")
@@ -246,11 +358,35 @@ class QuotlyRenderer:
                 type="png",
                 animations="disabled",
                 caret="initial",
-                timeout=15000
+                timeout=10000
             )
+            
+            elapsed = time.time() - start_time
+            logger.debug(f"渲染完成，耗时: {elapsed:.2f}秒")
+            
             return screenshot
         finally:
-            await page.close()
+            await self._return_page(page)
+
+    async def _preload_avatar(self, url: str):
+        """预加载并缓存头像"""
+        if not url or url.startswith('data:'):
+            return
+        
+        cached = await QuotlyRenderer._avatar_cache.get(url)
+        if cached is not None:
+            return
+        
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        await QuotlyRenderer._avatar_cache.set(url, data)
+                        logger.debug(f"预加载头像缓存: {url[:50]}...")
+        except Exception as e:
+            logger.debug(f"预加载头像失败: {url[:50]}..., 错误: {e}")
 
     def render(self, messages: List[dict]) -> bytes:
         """

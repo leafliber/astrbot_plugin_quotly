@@ -196,6 +196,40 @@ class QuotlyPlugin(Star):
             logger.warning(f"下载图片失败: {e}")
             return ""
 
+    async def _background_ocr_update(self, image_hash: str, ocr_tasks_data: list, storage_messages: list):
+        """
+        后台执行 OCR 并更新数据库记录
+        
+        Args:
+            image_hash: 图片 hash 值
+            ocr_tasks_data: OCR 任务数据列表，每项为 (消息索引, 图片URL列表)
+            storage_messages: 存储的消息列表
+        """
+        try:
+            for msg_idx, image_urls in ocr_tasks_data:
+                ocr_results = []
+                for img_url in image_urls:
+                    try:
+                        ocr_result = await self._ocr_image(img_url)
+                        if ocr_result:
+                            ocr_results.append(ocr_result)
+                    except Exception as e:
+                        logger.debug(f"OCR 失败: {e}")
+                
+                if ocr_results:
+                    ocr_text = " ".join(ocr_results)
+                    storage_messages[msg_idx]["ocr_text"] = ocr_text
+                    logger.debug(f"消息 {msg_idx} 后台 OCR 完成: {ocr_text[:100]}...")
+            
+            try:
+                await self.db.update_ocr_text(image_hash, storage_messages)
+                logger.debug(f"OCR 结果已更新到数据库: hash={image_hash}")
+            except Exception as e:
+                logger.warning(f"更新 OCR 结果失败: {e}")
+                
+        except Exception as e:
+            logger.warning(f"后台 OCR 任务失败: {e}")
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """
@@ -462,6 +496,8 @@ class QuotlyPlugin(Star):
                     return
 
             storage_messages = []
+            ocr_tasks_data = []
+            
             for i, msg_data_item in enumerate(messages_data):
                 sender = msg_data_item.get("sender", {})
                 
@@ -478,19 +514,6 @@ class QuotlyPlugin(Star):
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
                 original_time = msg_data_item.get("time", 0)
 
-                ocr_text = ""
-                if self.enable_ocr:
-                    image_urls = self._extract_image_urls(msg_data_item.get("message", []))
-                    if image_urls:
-                        ocr_results = []
-                        for img_url in image_urls:
-                            ocr_result = await self._ocr_image(img_url)
-                            if ocr_result:
-                                ocr_results.append(ocr_result)
-                        if ocr_results:
-                            ocr_text = " ".join(ocr_results)
-                            logger.debug(f"消息 {i} OCR识别结果: {ocr_text[:100]}...")
-
                 storage_messages.append({
                     "user_id": user_id,
                     "nickname": nickname,
@@ -498,16 +521,24 @@ class QuotlyPlugin(Star):
                     "title": title,
                     "role": role,
                     "content": content,
-                    "ocr_text": ocr_text,
+                    "ocr_text": "",
                     "time_str": time_str,
                     "original_time": original_time
                 })
+                
+                if self.enable_ocr:
+                    image_urls = self._extract_image_urls(msg_data_item.get("message", []))
+                    if image_urls:
+                        ocr_tasks_data.append((i, image_urls))
 
             try:
                 await self.db.save_record(image_hash, png_data, group_id, storage_messages)
                 logger.debug(f"Quotly 记录已保存: hash={image_hash}")
             except Exception as e:
                 logger.warning(f"保存 Quotly 记录失败: {e}")
+
+            if ocr_tasks_data:
+                asyncio.create_task(self._background_ocr_update(image_hash, ocr_tasks_data, storage_messages))
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 f.write(png_data)
