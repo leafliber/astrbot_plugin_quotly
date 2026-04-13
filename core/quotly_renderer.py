@@ -4,9 +4,24 @@ QQ 聊天气泡样式 1:1 复刻
 """
 
 import asyncio
+import base64
+import pathlib
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from astrbot.api import logger
+
+try:
+    from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+    HAS_ASTRBOT_PATH = True
+except ImportError:
+    HAS_ASTRBOT_PATH = False
+
+
+FONT_DOWNLOAD_URLS = {
+    "HarmonyOS_Sans_SC_Regular.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Regular.ttf",
+    "HarmonyOS_Sans_SC_Medium.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Medium.ttf",
+    "HarmonyOS_Sans_SC_Bold.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Bold.ttf",
+}
 
 
 class QuotlyRenderer:
@@ -14,6 +29,9 @@ class QuotlyRenderer:
     
     _global_lock = asyncio.Lock()
     _instance_count = 0
+    _font_base64_cache: Optional[str] = None
+    _fonts_checked = False
+    _font_lock = asyncio.Lock()
 
     def __init__(self):
         """
@@ -24,8 +42,118 @@ class QuotlyRenderer:
         self._lock = asyncio.Lock()
         self._initialized = False
         
+        if HAS_ASTRBOT_PATH:
+            data_path = get_astrbot_data_path()
+            data_dir = (pathlib.Path(data_path) if isinstance(data_path, str)
+                       else data_path) / "plugin_data" / "astrbot_plugin_quotly"
+        else:
+            data_dir = Path(__file__).parent.parent / "data"
+        
+        self._fonts_dir = data_dir / "fonts"
+        self._fonts_dir.mkdir(parents=True, exist_ok=True)
+        
         QuotlyRenderer._instance_count += 1
         logger.debug(f"QuotlyRenderer 实例创建，当前实例数: {QuotlyRenderer._instance_count}")
+
+    async def ensure_fonts(self):
+        """
+        确保字体文件存在，如果不存在则自动下载
+        可在插件启动时调用，提前下载字体
+        """
+        if QuotlyRenderer._fonts_checked:
+            return
+        
+        async with QuotlyRenderer._font_lock:
+            if QuotlyRenderer._fonts_checked:
+                return
+            
+            missing_fonts = []
+            for font_file in FONT_DOWNLOAD_URLS:
+                font_path = self._fonts_dir / font_file
+                if not font_path.exists():
+                    missing_fonts.append(font_file)
+            
+            if not missing_fonts:
+                logger.debug("所有字体文件已存在")
+                QuotlyRenderer._fonts_checked = True
+                return
+            
+            logger.info(f"正在下载缺失的字体文件: {missing_fonts}")
+            
+            import aiohttp
+            downloaded = False
+            try:
+                async with aiohttp.ClientSession() as session:
+                    for font_file in missing_fonts:
+                        url = FONT_DOWNLOAD_URLS[font_file]
+                        font_path = self._fonts_dir / font_file
+                        try:
+                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                                if resp.status == 200:
+                                    font_data = await resp.read()
+                                    with open(font_path, "wb") as f:
+                                        f.write(font_data)
+                                    logger.info(f"字体下载成功: {font_file}")
+                                    downloaded = True
+                                else:
+                                    logger.warning(f"字体下载失败: {font_file}, HTTP {resp.status}")
+                        except Exception as e:
+                            logger.warning(f"字体下载失败: {font_file}, 错误: {e}")
+            except Exception as e:
+                logger.error(f"字体下载过程出错: {e}")
+            
+            if downloaded:
+                QuotlyRenderer._font_base64_cache = None
+            
+            all_exist = all((self._fonts_dir / f).exists() for f in FONT_DOWNLOAD_URLS)
+            if all_exist:
+                QuotlyRenderer._fonts_checked = True
+
+    def _get_font_base64(self) -> Optional[str]:
+        """
+        获取本地字体的 base64 编码（带缓存）
+        
+        Returns:
+            字体的 base64 data URI，如果字体不存在则返回 None
+        """
+        if QuotlyRenderer._font_base64_cache is not None:
+            return QuotlyRenderer._font_base64_cache
+        
+        font_weight_map = {
+            "HarmonyOS_Sans_SC_Regular.ttf": "font-weight: 400;",
+            "HarmonyOS_Sans_SC_Medium.ttf": "font-weight: 500;",
+            "HarmonyOS_Sans_SC_Bold.ttf": "font-weight: 700;",
+        }
+        
+        font_faces = []
+        has_local_font = False
+        
+        for font_file, url in FONT_DOWNLOAD_URLS.items():
+            font_path = self._fonts_dir / font_file
+            if font_path.exists():
+                try:
+                    with open(font_path, "rb") as f:
+                        font_data = f.read()
+                    font_base64 = base64.b64encode(font_data).decode("utf-8")
+                    weight_style = font_weight_map.get(font_file, "font-weight: 400;")
+                    font_faces.append(f"""
+        @font-face {{
+            font-family: 'HarmonyOS Sans SC';
+            src: url(data:font/ttf;base64,{font_base64}) format('truetype');
+            {weight_style}
+            font-display: swap;
+        }}""")
+                    has_local_font = True
+                    logger.debug(f"已加载本地字体: {font_file}")
+                except Exception as e:
+                    logger.warning(f"读取字体文件失败 {font_file}: {e}")
+        
+        if has_local_font:
+            QuotlyRenderer._font_base64_cache = "\n".join(font_faces)
+            logger.info("使用本地 HarmonyOS Sans SC 字体")
+            return QuotlyRenderer._font_base64_cache
+        
+        return None
 
     async def _ensure_browser(self):
         """确保浏览器实例已启动"""
@@ -41,6 +169,7 @@ class QuotlyRenderer:
                             '--disable-gpu',
                             '--disable-gpu-compositing',
                             '--disable-software-rasterizer',
+                            '--allow-file-access-from-files',
                         ]
                     )
                     self._initialized = True
@@ -92,6 +221,7 @@ class QuotlyRenderer:
         Returns:
             PNG 格式的字节数据
         """
+        asyncio.create_task(self.ensure_fonts())
         await self._ensure_browser()
         html_content = self._build_html(messages, show_title=show_title, show_time=show_time, show_date=show_date)
         
@@ -221,11 +351,11 @@ class QuotlyRenderer:
             """
 
         # 完整 HTML
-        html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
+        local_font_css = self._get_font_base64()
+        
+        font_cdn_links = ""
+        if not local_font_css:
+            font_cdn_links = """
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet" media="print" onload="this.media='all'">
     <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet" media="print" onload="this.media='all'">
@@ -234,8 +364,15 @@ class QuotlyRenderer:
         <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet">
         <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet">
         <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet">
-    </noscript>
+    </noscript>"""
+        
+        html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">{font_cdn_links}
     <style>
+        {local_font_css if local_font_css else ''}
         * {{
             margin: 0;
             padding: 0;
