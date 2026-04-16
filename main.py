@@ -258,7 +258,8 @@ class QuotlyPlugin(Star):
     async def quote_command(self, event: AstrMessageEvent):
         """
         将消息渲染为精美的引用图片
-        用法: /q [数量] [--title 0|1] [--time 0|1] [--date 0|1] [--user [QQ号]] [--pick 序号列表]
+        用法: /q [数量] [silent] [--title 0|1] [--time 0|1] [--date 0|1] [--user [QQ号]] [--pick 序号列表]
+        silent: 静默模式，只保存语录不发送图片，仅返回保存结果
         """
         message_str = event.message_str.strip()
         args = re.sub(r'^q\s*', '', message_str)
@@ -278,8 +279,14 @@ class QuotlyPlugin(Star):
         show_title = self.show_title
         show_time = self.show_time
         show_date = self.show_date
+        silent = False
         
         logger.debug(f"解析消息: args='{args}'")
+
+        silent_match = re.search(r'\bsilent\b', args, re.IGNORECASE)
+        if silent_match:
+            silent = True
+            args = args[:silent_match.start()] + args[silent_match.end():]
 
         match = re.match(r'^(\d+)', args)
         if match:
@@ -488,11 +495,14 @@ class QuotlyPlugin(Star):
                 duplicate_path = duplicate.get('image_path')
                 if duplicate_path and Path(duplicate_path).exists():
                     logger.debug(f"返回已存在的相似语录: {duplicate_path}")
-                    await asyncio.sleep(random.uniform(0, 2))
-                    yield event.chain_result([
-                        Comp.Image.fromFileSystem(duplicate_path),
-                        Comp.Plain(f"\n检测到相似语录（相似度: {100 - distance * 3}%），已返回已有记录")
-                    ])
+                    if silent:
+                        yield event.plain_result(f"语录已存在（相似度: {100 - distance * 3}%），未保存新记录")
+                    else:
+                        await asyncio.sleep(random.uniform(0, 2))
+                        yield event.chain_result([
+                            Comp.Image.fromFileSystem(duplicate_path),
+                            Comp.Plain(f"\n检测到相似语录（相似度: {100 - distance * 3}%），已返回已有记录")
+                        ])
                     return
 
             storage_messages = []
@@ -540,17 +550,19 @@ class QuotlyPlugin(Star):
             if ocr_tasks_data:
                 asyncio.create_task(self._background_ocr_update(image_hash, ocr_tasks_data, storage_messages))
 
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(png_data)
-                temp_path = f.name
+            if silent:
+                yield event.plain_result(f"语录保存成功（{len(storage_messages)} 条消息）")
+            else:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                    f.write(png_data)
+                    temp_path = f.name
 
-            try:
-                await asyncio.sleep(random.uniform(0, 2))
-                yield event.chain_result([Comp.Image.fromFileSystem(temp_path)])
-            finally:
-                # 清理临时文件
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                try:
+                    await asyncio.sleep(random.uniform(0, 2))
+                    yield event.chain_result([Comp.Image.fromFileSystem(temp_path)])
+                finally:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
 
         except Exception as e:
             import traceback
