@@ -293,8 +293,8 @@ class QuotlyPlugin(Star):
             count = int(match.group(1))
             if count < 1:
                 count = 1
-            if count > 20:
-                count = 20
+            if count > 100:
+                count = 100
 
         title_match = re.search(r'--title\s+([01])', args)
         if title_match:
