@@ -328,18 +328,23 @@ class QuotlyRenderer:
         for msg in messages:
             if msg.get('type') != 'date_separator':
                 avatar_url = msg.get('avatar_url', '')
-                if avatar_url:
+                if avatar_url and not avatar_url.startswith('data:'):
                     avatar_urls.add(avatar_url)
         
         if avatar_urls:
             preload_tasks = [self._preload_avatar(url) for url in avatar_urls]
             await asyncio.gather(*preload_tasks, return_exceptions=True)
         
-        html_content = self._build_html(messages, show_title=show_title, show_time=show_time, show_date=show_date)
+        html_content = await self._build_html_async(messages, show_title=show_title, show_time=show_time, show_date=show_date)
         
         page = await self._get_page()
         try:
-            await page.set_content(html_content, wait_until="domcontentloaded", timeout=10000)
+            await page.set_content(html_content, wait_until="commit", timeout=30000)
+            
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception as e:
+                logger.debug(f"DOM 加载超时，继续渲染: {e}")
             
             try:
                 await page.wait_for_function(
@@ -348,7 +353,7 @@ class QuotlyRenderer:
                         if (images.length === 0) return true;
                         return Array.from(images).every(img => img.complete);
                     }""",
-                    timeout=3000
+                    timeout=5000
                 )
             except Exception as e:
                 logger.debug(f"图片加载等待超时，继续渲染: {e}")
@@ -358,7 +363,7 @@ class QuotlyRenderer:
                 type="png",
                 animations="disabled",
                 caret="initial",
-                timeout=10000
+                timeout=30000
             )
             
             elapsed = time.time() - start_time
@@ -400,12 +405,24 @@ class QuotlyRenderer:
         """
         return asyncio.run(self.arender(messages))
 
-    def _build_html(self, messages: List[dict], show_title: bool = True, show_time: bool = True, show_date: bool = True) -> str:
-        """构建 HTML 内容 - QQ 聊天气泡样式"""
-        # 构建消息 HTML
+    async def _get_avatar_base64(self, url: str) -> str:
+        """获取头像的 base64 数据"""
+        if not url:
+            return ""
+        
+        if url.startswith('data:'):
+            return url
+        
+        cached = await QuotlyRenderer._avatar_cache.get(url)
+        if cached:
+            return f"data:image/png;base64,{base64.b64encode(cached).decode('utf-8')}"
+        
+        return url
+
+    async def _build_html_async(self, messages: List[dict], show_title: bool = True, show_time: bool = True, show_date: bool = True) -> str:
+        """构建 HTML 内容 - QQ 聊天气泡样式（异步版本，使用预加载的头像）"""
         messages_html = ""
         for msg in messages:
-            # 检查是否为日期分隔符
             if msg.get('type') == 'date_separator':
                 if show_date:
                     date_str = self._escape_html(msg.get('date_str', ''))
@@ -414,23 +431,24 @@ class QuotlyRenderer:
             
             nickname = self._escape_html(msg.get('nickname', '未知用户'))
             card = msg.get('card', '')
-            title = msg.get('title', '')  # 群头衔
-            role = msg.get('role', 'member')  # 角色 (owner/admin/member)
+            title = msg.get('title', '')
+            role = msg.get('role', 'member')
             content = self._escape_html(msg.get('content', ''))
             time_str = self._escape_html(msg.get('time_str', ''))
             avatar_url = msg.get('avatar_url', '')
-            reply_info = msg.get('reply_info')  # 回复信息
+            reply_info = msg.get('reply_info')
 
-            # 头像 HTML
+            avatar_html = ""
             if avatar_url:
-                avatar_html = f'<img class="avatar" src="{avatar_url}" onerror="this.style.display=\'none\'">'
-            else:
+                avatar_base64 = await self._get_avatar_base64(avatar_url)
+                if avatar_base64:
+                    avatar_html = f'<img class="avatar" src="{avatar_base64}" onerror="this.style.display=\'none\'">'
+            
+            if not avatar_html:
                 avatar_html = f'<div class="avatar-placeholder">{nickname[0] if nickname else "?"}</div>'
 
-            # 头部信息：群头衔 > 姓名 > 时间
             header_html = ""
             
-            # 根据 role 和 title 决定头衔显示
             if show_title:
                 if role == "owner":
                     header_html += '<span class="title-owner">群主</span>'
@@ -444,7 +462,6 @@ class QuotlyRenderer:
             if show_time and time_str:
                 header_html += f'<span class="time">{time_str}</span>'
 
-            # 回复预览 HTML
             reply_html = ""
             if reply_info:
                 reply_nickname = self._escape_html(reply_info.get('nickname', ''))
@@ -459,7 +476,6 @@ class QuotlyRenderer:
                     <div class="reply-content">{reply_content_html}</div>
                 </div>'''
 
-            # 检查是否只有一张图片（没有回复预览时才生效）
             is_image_only, image_url = self._is_image_only(content)
             bubble_class = "bubble"
             content_html = ""
@@ -471,7 +487,6 @@ class QuotlyRenderer:
                 content_html_parsed, _ = self._parse_content(content)
                 content_html = f'<div class="message-content">{content_html_parsed}</div>'
 
-            # 消息气泡
             messages_html += f"""
             <div class="message left">
                 <div class="avatar-wrapper">
@@ -486,7 +501,6 @@ class QuotlyRenderer:
             </div>
             """
 
-        # 完整 HTML
         local_font_css = self._get_font_base64()
         
         font_cdn_links = ""
@@ -502,7 +516,11 @@ class QuotlyRenderer:
         <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet">
     </noscript>"""
         
-        html = f"""
+        return self._build_html_template(messages_html, local_font_css, font_cdn_links)
+
+    def _build_html_template(self, messages_html: str, local_font_css: str, font_cdn_links: str) -> str:
+        """构建完整的 HTML 模板"""
+        return f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -627,7 +645,6 @@ class QuotlyRenderer:
             font-size: 26px;
         }}
 
-        /* 气泡样式 - 白色气泡，无箭头 */
         .bubble {{
             background: #ffffff;
             border-radius: 24px;
@@ -660,7 +677,6 @@ class QuotlyRenderer:
             object-fit: contain;
         }}
 
-        /* 纯图片消息气泡样式 - 图片填满气泡 */
         .bubble.image-only {{
             padding: 0;
             overflow: hidden;
@@ -678,7 +694,6 @@ class QuotlyRenderer:
             object-fit: cover;
         }}
 
-        /* 回复预览样式 */
         .reply-preview {{
             background: #f5f5f5;
             border-left: 3px solid #999;
@@ -732,7 +747,6 @@ class QuotlyRenderer:
     function adjustBubbleWidth() {{
         const bubbles = document.querySelectorAll('.bubble');
         bubbles.forEach(bubble => {{
-            // 跳过纯图片气泡
             if (bubble.classList.contains('image-only')) {{
                 return;
             }}
@@ -741,7 +755,6 @@ class QuotlyRenderer:
             const replyPreview = bubble.querySelector('.reply-preview');
             if (!content) return;
             
-            // 测量消息内容的宽度
             const contentRange = document.createRange();
             contentRange.selectNodeContents(content);
             const contentRects = contentRange.getClientRects();
@@ -754,14 +767,11 @@ class QuotlyRenderer:
                     }}
                 }}
             }} else {{
-                // 备用方法
                 maxContentWidth = content.scrollWidth;
             }}
             
-            // 测量回复预览的宽度（如果存在）
             let replyWidth = 0;
             if (replyPreview) {{
-                // 临时移除 max-width 限制来测量实际宽度
                 const originalMaxWidth = replyPreview.style.maxWidth;
                 replyPreview.style.maxWidth = 'none';
                 replyPreview.style.width = 'auto';
@@ -770,22 +780,16 @@ class QuotlyRenderer:
                 replyPreview.style.width = '';
             }}
             
-            // 取两者的最大值，并向上取整
             const maxLineWidth = Math.ceil(Math.max(maxContentWidth, replyWidth));
-            
-            // 气泡使用 box-sizing: border-box，padding 已包含在宽度内
-            // 需要足够余量避免字体渲染精度问题导致换行
             const extraPadding = 6;
             const minWidth = 100;
             const maxWidth = 1100;
             
-            // 最终宽度 = 内容宽度 + 气泡左右 padding (40px) + 额外余量
             const finalWidth = Math.min(Math.max(maxLineWidth + 40 + extraPadding, minWidth), maxWidth);
             bubble.style.width = Math.ceil(finalWidth) + 'px';
         }});
     }}
     
-    // 等待所有图片加载完成后再调整宽度
     function waitForImagesAndAdjust() {{
         const images = document.querySelectorAll('.msg-image, .msg-image-full');
         let loadedCount = 0;
@@ -818,7 +822,6 @@ class QuotlyRenderer:
             }}
         }});
         
-        // 超时保护：最多等待 3 秒
         setTimeout(() => {{
             adjustBubbleWidth();
         }}, 3000);
@@ -833,7 +836,110 @@ class QuotlyRenderer:
 </body>
 </html>
         """
-        return html
+
+    def _build_html(self, messages: List[dict], show_title: bool = True, show_time: bool = True, show_date: bool = True) -> str:
+        """构建 HTML 内容 - QQ 聊天气泡样式"""
+        # 构建消息 HTML
+        messages_html = ""
+        for msg in messages:
+            # 检查是否为日期分隔符
+            if msg.get('type') == 'date_separator':
+                if show_date:
+                    date_str = self._escape_html(msg.get('date_str', ''))
+                    messages_html += f'<div class="date-separator"><span class="date-text">{date_str}</span></div>\n'
+                continue
+            
+            nickname = self._escape_html(msg.get('nickname', '未知用户'))
+            card = msg.get('card', '')
+            title = msg.get('title', '')  # 群头衔
+            role = msg.get('role', 'member')  # 角色 (owner/admin/member)
+            content = self._escape_html(msg.get('content', ''))
+            time_str = self._escape_html(msg.get('time_str', ''))
+            avatar_url = msg.get('avatar_url', '')
+            reply_info = msg.get('reply_info')  # 回复信息
+
+            # 头像 HTML
+            if avatar_url:
+                avatar_html = f'<img class="avatar" src="{avatar_url}" onerror="this.style.display=\'none\'">'
+            else:
+                avatar_html = f'<div class="avatar-placeholder">{nickname[0] if nickname else "?"}</div>'
+
+            # 头部信息：群头衔 > 姓名 > 时间
+            header_html = ""
+            
+            # 根据 role 和 title 决定头衔显示
+            if show_title:
+                if role == "owner":
+                    header_html += '<span class="title-owner">群主</span>'
+                elif role == "admin":
+                    display_title = title if title else "管理员"
+                    header_html += f'<span class="title-admin">{display_title}</span>'
+                elif title:
+                    header_html += f'<span class="title-special">{title}</span>'
+            
+            header_html += f'<span class="nickname">{card if card else nickname}</span>'
+            if show_time and time_str:
+                header_html += f'<span class="time">{time_str}</span>'
+
+            # 回复预览 HTML
+            reply_html = ""
+            if reply_info:
+                reply_nickname = self._escape_html(reply_info.get('nickname', ''))
+                reply_content = reply_info.get('content', '')
+                reply_content_html, _ = self._parse_content(reply_content)
+                reply_html = f'''
+                <div class="reply-preview">
+                    <div class="reply-header">
+                        <span class="reply-arrow">↩</span>
+                        <span class="reply-nickname">{reply_nickname}</span>
+                    </div>
+                    <div class="reply-content">{reply_content_html}</div>
+                </div>'''
+
+            # 检查是否只有一张图片（没有回复预览时才生效）
+            is_image_only, image_url = self._is_image_only(content)
+            bubble_class = "bubble"
+            content_html = ""
+            
+            if is_image_only and not reply_html:
+                bubble_class = "bubble image-only"
+                content_html = f'<img class="msg-image-full" src="{image_url}" alt="[图片]" onerror="this.outerHTML=\'[图片]\'">'
+            else:
+                content_html_parsed, _ = self._parse_content(content)
+                content_html = f'<div class="message-content">{content_html_parsed}</div>'
+
+            # 消息气泡
+            messages_html += f"""
+            <div class="message left">
+                <div class="avatar-wrapper">
+                    {avatar_html}
+                </div>
+                <div class="content-wrapper">
+                    <div class="message-header">{header_html}</div>
+                    <div class="{bubble_class}">
+                        {reply_html}{content_html}
+                    </div>
+                </div>
+            </div>
+            """
+
+        # 完整 HTML
+        local_font_css = self._get_font_base64()
+        
+        font_cdn_links = ""
+        if not local_font_css:
+            font_cdn_links = """
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet" media="print" onload="this.media='all'">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet" media="print" onload="this.media='all'">
+    <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript>
+        <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Regular/Regular.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Medium/Medium.css" rel="stylesheet">
+        <link href="https://cdn.jsdelivr.net/npm/harmonyos-sans-webfont-splitted@latest/dist/HarmonyOS_Sans_SC/Bold/Bold.css" rel="stylesheet">
+    </noscript>"""
+        
+        return self._build_html_template(messages_html, local_font_css, font_cdn_links)
 
     def _escape_html(self, text: str) -> str:
         """转义 HTML 特殊字符"""
