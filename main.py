@@ -496,7 +496,11 @@ class QuotlyPlugin(Star):
                 if duplicate_path and Path(duplicate_path).exists():
                     logger.debug(f"返回已存在的相似语录: {duplicate_path}")
                     if silent:
-                        yield event.plain_result(f"语录已存在（相似度: {100 - distance * 3}%），未保存新记录")
+                        await self.context.send_message(
+                            event.unified_msg_origin,
+                            [Comp.Plain(f"语录已存在（相似度: {100 - distance * 3}%），未保存新记录")]
+                        )
+                        return
                     else:
                         await asyncio.sleep(random.uniform(0, 2))
                         yield event.chain_result([
@@ -551,7 +555,11 @@ class QuotlyPlugin(Star):
                 asyncio.create_task(self._background_ocr_update(image_hash, ocr_tasks_data, storage_messages))
 
             if silent:
-                yield event.plain_result(f"语录保存成功（{len(storage_messages)} 条消息）")
+                await self.context.send_message(
+                    event.unified_msg_origin,
+                    [Comp.Plain(f"语录保存成功（{len(storage_messages)} 条消息）")]
+                )
+                return
             else:
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                     f.write(png_data)
