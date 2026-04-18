@@ -132,6 +132,8 @@ class MessageParser:
                 self._parse_onebot_segment(segment, text_parts)
                 if segment.get("type") == "reply":
                     rid = segment.get("data", {}).get("id")
+                    from astrbot.api import logger
+                    logger.debug(f"解析 reply 消息段: segment={segment}, rid={rid}")
                     if rid is not None:
                         try:
                             reply_id = int(rid)

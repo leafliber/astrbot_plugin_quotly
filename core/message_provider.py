@@ -302,7 +302,10 @@ class MessageProvider:
                 ob_segment["data"]["qq"] = segment.get("qq", "") or segment.get("user_id", "")
                 ob_segment["data"]["name"] = segment.get("name", "")
             elif mr_type == "Reply":
-                ob_segment["data"]["id"] = segment.get("id", "") or segment.get("message_id", "")
+                logger.debug(f"Reply 消息段原始数据: {segment}")
+                reply_id = segment.get("message_id") or segment.get("id", "")
+                logger.debug(f"提取的 reply_id: {reply_id}")
+                ob_segment["data"]["id"] = reply_id
             elif mr_type == "File":
                 ob_segment["data"]["url"] = segment.get("url", "") or segment.get("file", "")
                 ob_segment["data"]["name"] = segment.get("name", "")
