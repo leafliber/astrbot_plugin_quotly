@@ -70,7 +70,7 @@
       "qdel_require_admin": {
         "description": "删除语录需要管理员权限",
         "type": "bool",
-        "hint": "是否要求删除语录（/qdel）需要群管理员或群主权限",
+        "hint": "是否要求删除语录（/qdel）需要群管理员、群主或AstrBot管理员权限",
         "default": true
       }
     }

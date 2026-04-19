@@ -752,24 +752,31 @@ class QuotlyPlugin(Star):
         用法: /qdel（需回复机器人发送的语录图片）
         """
         if self.qdel_require_admin:
-            group_id = getattr(event.message_obj, 'group_id', None)
-            if group_id:
-                user_id = getattr(event.message_obj, 'sender', None)
-                if user_id:
-                    user_id = getattr(user_id, 'user_id', None)
-                
-                if user_id:
-                    try:
-                        member_info = await self.onebot.get_group_member_info(int(group_id), int(user_id))
-                        if member_info:
-                            role = member_info.get('role', 'member')
-                            if role not in ['owner', 'admin']:
-                                yield event.plain_result("删除语录需要管理员权限")
-                                return
-                    except Exception as e:
-                        logger.warning(f"检查用户权限失败: {e}")
-                        yield event.plain_result("无法验证权限，请稍后重试")
-                        return
+            is_authorized = False
+            
+            if hasattr(event, 'role') and event.role == 'admin':
+                is_authorized = True
+            
+            if not is_authorized:
+                group_id = getattr(event.message_obj, 'group_id', None)
+                if group_id:
+                    user_id = getattr(event.message_obj, 'sender', None)
+                    if user_id:
+                        user_id = getattr(user_id, 'user_id', None)
+                    
+                    if user_id:
+                        try:
+                            member_info = await self.onebot.get_group_member_info(int(group_id), int(user_id))
+                            if member_info:
+                                role = member_info.get('role', 'member')
+                                if role in ['owner', 'admin']:
+                                    is_authorized = True
+                        except Exception as e:
+                            logger.warning(f"检查用户权限失败: {e}")
+            
+            if not is_authorized:
+                yield event.plain_result("删除语录需要群管理员或AstrBot管理员权限")
+                return
         
         async for result in self._handle_delete(event):
             yield result
