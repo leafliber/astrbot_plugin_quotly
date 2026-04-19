@@ -719,7 +719,10 @@ class QuotlyPlugin(Star):
             image_path = result.get('image_path')
             if image_path and Path(image_path).exists():
                 await asyncio.sleep(random.uniform(0, 2))
-                yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
+                await self.context.send_message(
+                    event.unified_msg_origin,
+                    [Comp.Image.fromFileSystem(image_path)]
+                )
             else:
                 yield event.plain_result(f"图片文件不存在: {image_path}")
 
