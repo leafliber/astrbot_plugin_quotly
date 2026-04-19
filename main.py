@@ -250,8 +250,7 @@ class QuotlyPlugin(Star):
             return
         
         if self.qrandom_trigger and message_str == self.qrandom_trigger:
-            async for result in self._handle_random(event, ""):
-                yield result
+            await self._handle_random(event, "")
             return
 
     @filter.command("q")
@@ -683,8 +682,7 @@ class QuotlyPlugin(Star):
         """
         message_str = event.message_str.strip()
         args = re.sub(r'^qrandom\s*', '', message_str)
-        async for result in self._handle_random(event, args):
-            yield result
+        await self._handle_random(event, args)
 
     async def _handle_random(self, event: AstrMessageEvent, args: str):
         group_id_str = getattr(event.message_obj, 'group_id', None)
@@ -712,7 +710,10 @@ class QuotlyPlugin(Star):
 
             if not results:
                 search_scope = "所有群" if group_id is None else "本群"
-                yield event.plain_result(f"暂无{search_scope} Quotly 记录")
+                await self.context.send_message(
+                    event.unified_msg_origin,
+                    [Comp.Plain(f"暂无{search_scope} Quotly 记录")]
+                )
                 return
 
             result = results[0]
@@ -724,11 +725,17 @@ class QuotlyPlugin(Star):
                     [Comp.Image.fromFileSystem(image_path)]
                 )
             else:
-                yield event.plain_result(f"图片文件不存在: {image_path}")
+                await self.context.send_message(
+                    event.unified_msg_origin,
+                    [Comp.Plain(f"图片文件不存在: {image_path}")]
+                )
 
         except Exception as e:
             logger.error(f"随机获取失败: {e}")
-            yield event.plain_result(f"随机获取失败: {str(e)}")
+            await self.context.send_message(
+                event.unified_msg_origin,
+                [Comp.Plain(f"随机获取失败: {str(e)}")]
+            )
 
     @filter.command("qstats")
     async def stats_command(self, event: AstrMessageEvent):
