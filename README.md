@@ -150,7 +150,7 @@ playwright install --with-deps chromium
 
 ## 🙏 致谢
 
-本项目灵感来源于 Telegram 平台上广受喜爱的 [quote-bot](https://github.com/quote-bot)，感谢原作者创造的优雅设计理念。
+本项目灵感来源于 Telegram 平台上广受喜爱的 [quote-bot](https://github.com/LyoSU/quote-bot)，感谢原作者创造的优雅设计理念。
 
 特别感谢：
 - **AstrBot** 团队提供的优秀插件开发框架
