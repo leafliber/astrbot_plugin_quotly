@@ -9,6 +9,7 @@ import random
 import re
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 # 将插件目录添加到模块搜索路径
@@ -264,8 +265,10 @@ class QuotlyPlugin(Star):
                 yield result
             return
         
-        if self.qrandom_trigger and message_str == self.qrandom_trigger:
-            await self._handle_random(event, "")
+        if self.qrandom_trigger and message_str.startswith(self.qrandom_trigger):
+            args = message_str[len(self.qrandom_trigger):].strip()
+            async for result in self._handle_random(event, args):
+                yield result
             return
 
     @filter.command("q")
@@ -302,6 +305,7 @@ class QuotlyPlugin(Star):
             silent = True
             args = args[:silent_match.start()] + args[silent_match.end():]
 
+        args = args.strip()
         match = re.match(r'^(\d+)', args)
         if match:
             count = int(match.group(1))
@@ -395,7 +399,6 @@ class QuotlyPlugin(Star):
                 msg_time = msg_data_item.get("time", 0)
                 
                 if show_date:
-                    from datetime import datetime
                     try:
                         msg_datetime = datetime.fromtimestamp(msg_time)
                         msg_date = msg_datetime.date()
@@ -412,15 +415,7 @@ class QuotlyPlugin(Star):
                 
                 sender = msg_data_item.get("sender", {})
                 
-                if isinstance(sender, dict) and "card" in sender and "title" in sender and "role" in sender:
-                    user_id = sender.get("user_id", 0)
-                    nickname = sender.get("nickname", "")
-                    card = sender.get("card", "")
-                    title = sender.get("title", "")
-                    role = sender.get("role", "member")
-                    logger.debug(f"使用 sender 中的完整信息: card={card}, title={title}, role={role}")
-                else:
-                    user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
+                user_id, nickname, card, title, role = self.parser.parse_sender_info_full(sender)
                 
                 msg_content = msg_data_item.get("message", [])
                 log_content = self._truncate_base64_in_message(msg_content)
@@ -504,7 +499,8 @@ class QuotlyPlugin(Star):
             if duplicate_records:
                 duplicate = duplicate_records[0]
                 distance = duplicate.get('hamming_distance', 0)
-                logger.info(f"检测到相似语录: hash={duplicate.get('image_hash')}, 汉明距离={distance}")
+                similarity_pct = round((1 - distance / 256) * 100, 1)
+                logger.info(f"检测到相似语录: hash={duplicate.get('image_hash')}, 汉明距离={distance}, 相似度={similarity_pct}%")
                 
                 duplicate_path = duplicate.get('image_path')
                 if duplicate_path and Path(duplicate_path).exists():
@@ -512,14 +508,14 @@ class QuotlyPlugin(Star):
                     if silent:
                         await self.context.send_message(
                             event.unified_msg_origin,
-                            [Comp.Plain(f"语录已存在（相似度: {100 - distance * 3}%），未保存新记录")]
+                            [Comp.Plain(f"语录已存在（相似度: {similarity_pct}%），未保存新记录")]
                         )
                         return
                     else:
                         await asyncio.sleep(random.uniform(0, 2))
                         yield event.chain_result([
                             Comp.Image.fromFileSystem(duplicate_path),
-                            Comp.Plain(f"\n检测到相似语录（相似度: {100 - distance * 3}%），已返回已有记录")
+                            Comp.Plain(f"\n检测到相似语录（相似度: {similarity_pct}%），已返回已有记录")
                         ])
                     return
 
@@ -529,14 +525,7 @@ class QuotlyPlugin(Star):
             for i, msg_data_item in enumerate(messages_data):
                 sender = msg_data_item.get("sender", {})
                 
-                if isinstance(sender, dict) and "card" in sender and "title" in sender and "role" in sender:
-                    user_id = sender.get("user_id", 0)
-                    nickname = sender.get("nickname", "")
-                    card = sender.get("card", "")
-                    title = sender.get("title", "")
-                    role = sender.get("role", "member")
-                else:
-                    user_id, nickname, card, title, role = self.parser.parse_sender_info(sender)
+                user_id, nickname, card, title, role = self.parser.parse_sender_info_full(sender)
                 
                 content, _ = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
@@ -622,7 +611,8 @@ class QuotlyPlugin(Star):
         max_count = 1
         keyword = args
 
-        if re.search(r'-a\b', args):
+        is_global = bool(re.search(r'-a\b', args))
+        if is_global:
             group_id = None
             keyword = re.sub(r'-a\b\s*', '', keyword)
 
@@ -634,13 +624,14 @@ class QuotlyPlugin(Star):
                 pass
             keyword = re.sub(r'-u\s*\d+\s*', '', keyword)
 
-        group_match = re.search(r'-g\s*(\d+)', args)
-        if group_match:
-            try:
-                group_id = int(group_match.group(1))
-            except ValueError:
-                pass
-            keyword = re.sub(r'-g\s*\d+\s*', '', keyword)
+        if not is_global:
+            group_match = re.search(r'-g\s*(\d+)', args)
+            if group_match:
+                try:
+                    group_id = int(group_match.group(1))
+                except ValueError:
+                    pass
+                keyword = re.sub(r'-g\s*\d+\s*', '', keyword)
 
         num_match = re.search(r'-n\s*(\d+)', args)
         if num_match:
@@ -658,7 +649,13 @@ class QuotlyPlugin(Star):
 
         try:
             search_limit = 20
-            if user_id:
+            if user_id and keyword:
+                results = await self.db.search_by_user(user_id, group_id, limit=search_limit)
+                results = [r for r in results if any(
+                    keyword in m.get('content', '') or keyword in m.get('nickname', '') or keyword in m.get('card', '') or keyword in m.get('ocr_text', '')
+                    for m in r.get('messages', [])
+                )]
+            elif user_id:
                 results = await self.db.search_by_user(user_id, group_id, limit=search_limit)
             elif keyword:
                 results = await self.db.search_by_keyword(keyword, group_id, limit=search_limit)
@@ -671,8 +668,7 @@ class QuotlyPlugin(Star):
                 yield event.plain_result(f"未在{search_scope}找到匹配的 Quotly 记录")
                 return
 
-            random.shuffle(results)
-            selected_results = results[:max_count]
+            selected_results = random.sample(results, min(max_count, len(results)))
 
             for result in selected_results:
                 image_path = result.get('image_path')
@@ -697,7 +693,8 @@ class QuotlyPlugin(Star):
         """
         message_str = event.message_str.strip()
         args = re.sub(r'^qrandom\s*', '', message_str)
-        await self._handle_random(event, args)
+        async for result in self._handle_random(event, args):
+            yield result
 
     async def _handle_random(self, event: AstrMessageEvent, args: str):
         group_id_str = getattr(event.message_obj, 'group_id', None)
@@ -710,47 +707,37 @@ class QuotlyPlugin(Star):
 
         group_id = current_group_id
 
-        if re.search(r'-a\b', args):
+        is_global = bool(re.search(r'-a\b', args))
+        if is_global:
             group_id = None
 
-        group_match = re.search(r'-g\s*(\d+)', args)
-        if group_match:
-            try:
-                group_id = int(group_match.group(1))
-            except ValueError:
-                pass
+        if not is_global:
+            group_match = re.search(r'-g\s*(\d+)', args)
+            if group_match:
+                try:
+                    group_id = int(group_match.group(1))
+                except ValueError:
+                    pass
 
         try:
             results = await self.db.get_random(group_id, limit=1)
 
             if not results:
                 search_scope = "所有群" if group_id is None else "本群"
-                await self.context.send_message(
-                    event.unified_msg_origin,
-                    [Comp.Plain(f"暂无{search_scope} Quotly 记录")]
-                )
+                yield event.plain_result(f"暂无{search_scope} Quotly 记录")
                 return
 
             result = results[0]
             image_path = result.get('image_path')
             if image_path and Path(image_path).exists():
                 await asyncio.sleep(random.uniform(0, 2))
-                await self.context.send_message(
-                    event.unified_msg_origin,
-                    [Comp.Image.fromFileSystem(image_path)]
-                )
+                yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
             else:
-                await self.context.send_message(
-                    event.unified_msg_origin,
-                    [Comp.Plain(f"图片文件不存在: {image_path}")]
-                )
+                yield event.plain_result(f"图片文件不存在: {image_path}")
 
         except Exception as e:
             logger.error(f"随机获取失败: {e}")
-            await self.context.send_message(
-                event.unified_msg_origin,
-                [Comp.Plain(f"随机获取失败: {str(e)}")]
-            )
+            yield event.plain_result(f"随机获取失败: {str(e)}")
 
     @filter.command("qstats")
     async def stats_command(self, event: AstrMessageEvent):
@@ -870,19 +857,22 @@ class QuotlyPlugin(Star):
             search_group_id = None
             search_user_id = None
             
-            if global_search.lower() != "true":
+            is_global = global_search.lower() == "true"
+            if is_global:
+                search_group_id = None
+            else:
                 current_group_id_str = getattr(event.message_obj, 'group_id', None)
                 if current_group_id_str:
                     try:
                         search_group_id = int(current_group_id_str)
                     except (ValueError, TypeError):
                         pass
-            
-            if group_id.strip():
-                try:
-                    search_group_id = int(group_id.strip())
-                except ValueError:
-                    pass
+                
+                if group_id.strip():
+                    try:
+                        search_group_id = int(group_id.strip())
+                    except ValueError:
+                        pass
             
             if user_id.strip():
                 try:
@@ -892,7 +882,13 @@ class QuotlyPlugin(Star):
 
             keyword = keyword.strip()
             
-            if search_user_id:
+            if search_user_id and keyword:
+                results = await self.db.search_by_user(search_user_id, search_group_id, limit=5)
+                results = [r for r in results if any(
+                    keyword in m.get('content', '') or keyword in m.get('nickname', '') or keyword in m.get('card', '') or keyword in m.get('ocr_text', '')
+                    for m in r.get('messages', [])
+                )]
+            elif search_user_id:
                 results = await self.db.search_by_user(search_user_id, search_group_id, limit=5)
             elif keyword:
                 results = await self.db.search_by_keyword(keyword, search_group_id, limit=5)
@@ -936,7 +932,10 @@ class QuotlyPlugin(Star):
         try:
             search_group_id = None
             
-            if global_random.lower() != "true":
+            is_global = global_random.lower() == "true"
+            if is_global:
+                search_group_id = None
+            else:
                 current_group_id_str = getattr(event.message_obj, 'group_id', None)
                 if current_group_id_str:
                     try:
@@ -944,7 +943,7 @@ class QuotlyPlugin(Star):
                     except (ValueError, TypeError):
                         pass
             
-            if group_id.strip():
+            if not is_global and group_id.strip():
                 try:
                     search_group_id = int(group_id.strip())
                 except ValueError:

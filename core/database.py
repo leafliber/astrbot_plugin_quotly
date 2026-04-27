@@ -178,6 +178,7 @@ class QuotlyDatabase:
         record_id = row['id']
         
         async with self._lock:
+            has_ocr_update = False
             for seq, msg in enumerate(messages):
                 ocr_text = msg.get('ocr_text', '')
                 if ocr_text:
@@ -185,18 +186,19 @@ class QuotlyDatabase:
                         "UPDATE quotly_messages SET ocr_text = ? WHERE record_id = ? AND seq = ?",
                         (ocr_text, record_id, seq)
                     )
-                    
+                    has_ocr_update = True
+            
+            if has_ocr_update:
+                await conn.execute(
+                    "DELETE FROM quotly_search WHERE record_id = ?",
+                    (record_id,)
+                )
+                for m in messages:
                     await conn.execute(
-                        "DELETE FROM quotly_search WHERE record_id = ?",
-                        (record_id,)
+                        "INSERT INTO quotly_search (record_id, nickname, card, title, content) VALUES (?, ?, ?, ?, ?)",
+                        (record_id, m.get('nickname', ''), m.get('card', ''), m.get('title', ''),
+                         m.get('content', '') + (' ' + m.get('ocr_text', '') if m.get('ocr_text') else ''))
                     )
-                    
-                    for m_idx, m in enumerate(messages):
-                        await conn.execute(
-                            "INSERT INTO quotly_search (record_id, nickname, card, title, content) VALUES (?, ?, ?, ?, ?)",
-                            (record_id, m.get('nickname', ''), m.get('card', ''), m.get('title', ''),
-                             m.get('content', '') + (' ' + m.get('ocr_text', '') if m.get('ocr_text') else ''))
-                        )
             
             await conn.commit()
         

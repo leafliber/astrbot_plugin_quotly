@@ -108,6 +108,27 @@ class MessageParser:
             sender.get("role", "member")
         )
 
+    def parse_sender_info_full(self, sender) -> tuple[int, str, str, str, str]:
+        """
+        解析发送者完整信息，优先使用包含 card/title/role 的 OneBot11 完整格式，
+        否则降级到 parse_sender_info
+
+        Args:
+            sender: OneBot11 sender 字典
+
+        Returns:
+            (user_id, nickname, card, title, role)
+        """
+        if isinstance(sender, dict) and "card" in sender and "title" in sender and "role" in sender:
+            return (
+                sender.get("user_id", 0),
+                sender.get("nickname", ""),
+                sender.get("card", ""),
+                sender.get("title", ""),
+                sender.get("role", "member")
+            )
+        return self.parse_sender_info(sender)
+
     def parse_message_content(self, message) -> tuple[str, Optional[int]]:
         """
         解析消息内容，提取纯文本和回复信息
