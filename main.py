@@ -51,16 +51,23 @@ class QuotlyPlugin(Star):
         self.qrandom_trigger = ""
         self._load_config()
 
-        self._font_init_task = asyncio.create_task(self._init_fonts())
+        self._font_init_task = asyncio.create_task(self._init_fonts_and_browser())
 
         logger.info("Quotly 插件已加载")
 
-    async def _init_fonts(self):
-        """初始化字体文件（后台任务）"""
+    async def _init_fonts_and_browser(self):
+        """初始化字体文件和浏览器（后台任务）"""
         try:
             await self.renderer.ensure_fonts()
+            logger.info("字体初始化完成")
         except Exception as e:
             logger.warning(f"字体初始化失败: {e}")
+
+        try:
+            await self.renderer._ensure_browser()
+            logger.info("浏览器预启动完成")
+        except Exception as e:
+            logger.warning(f"浏览器预启动失败: {e}")
 
     def _load_config(self):
         trigger_words = self.config.get("trigger_words", {})
@@ -136,24 +143,31 @@ class QuotlyPlugin(Star):
                                 data[key] = val[:max_len] + f"...(共{len(val)}字符)"
         return result
 
-    async def _ocr_image(self, image_url: str) -> str:
+    async def _ocr_image(self, image_url: str, umo: str) -> str:
         """
         使用AstrBot的视觉模型对图片进行OCR识别
         
         Args:
             image_url: 图片URL
+            umo: unified_msg_origin，用于获取当前会话的聊天模型
             
         Returns:
             OCR识别结果文本
         """
         try:
-            result = await self.context.llm.chat(
+            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            if not provider_id:
+                logger.warning("OCR识别失败: 无法获取当前会话的聊天模型")
+                return ""
+            
+            llm_resp = await self.context.llm_generate(
+                chat_provider_id=provider_id,
                 prompt="请识别这张图片中的所有文字内容，只输出识别到的文字，不要添加任何解释或说明。如果图片中没有文字，请输出：[无文字]",
                 image_urls=[image_url]
             )
             
-            if result:
-                ocr_text = result.strip()
+            if llm_resp and llm_resp.completion_text:
+                ocr_text = llm_resp.completion_text.strip()
                 if ocr_text and ocr_text != "[无文字]":
                     logger.debug(f"OCR识别成功: {ocr_text[:100]}...")
                     return ocr_text
@@ -196,7 +210,7 @@ class QuotlyPlugin(Star):
             logger.warning(f"下载图片失败: {e}")
             return ""
 
-    async def _background_ocr_update(self, image_hash: str, ocr_tasks_data: list, storage_messages: list):
+    async def _background_ocr_update(self, image_hash: str, ocr_tasks_data: list, storage_messages: list, umo: str):
         """
         后台执行 OCR 并更新数据库记录
         
@@ -204,13 +218,14 @@ class QuotlyPlugin(Star):
             image_hash: 图片 hash 值
             ocr_tasks_data: OCR 任务数据列表，每项为 (消息索引, 图片URL列表)
             storage_messages: 存储的消息列表
+            umo: unified_msg_origin，用于获取当前会话的聊天模型
         """
         try:
             for msg_idx, image_urls in ocr_tasks_data:
                 ocr_results = []
                 for img_url in image_urls:
                     try:
-                        ocr_result = await self._ocr_image(img_url)
+                        ocr_result = await self._ocr_image(img_url, umo)
                         if ocr_result:
                             ocr_results.append(ocr_result)
                     except Exception as e:
@@ -551,7 +566,7 @@ class QuotlyPlugin(Star):
                 logger.warning(f"保存 Quotly 记录失败: {e}")
 
             if ocr_tasks_data:
-                asyncio.create_task(self._background_ocr_update(image_hash, ocr_tasks_data, storage_messages))
+                asyncio.create_task(self._background_ocr_update(image_hash, ocr_tasks_data, storage_messages, event.unified_msg_origin))
 
             if silent:
                 await self.context.send_message(

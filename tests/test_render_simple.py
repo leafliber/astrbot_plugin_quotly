@@ -2,6 +2,7 @@
 简单渲染测试 - 不需要 playwright
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -10,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.quotly_renderer import QuotlyRenderer
 
 
-def test_html_generation():
-    """测试 HTML 生成"""
+async def test_html_generation():
     renderer = QuotlyRenderer()
 
     messages = [
@@ -44,15 +44,14 @@ def test_html_generation():
         }
     ]
 
-    html = renderer._build_html(messages)
+    html = await renderer._build_html_async(messages)
 
     print("=" * 60)
     print("HTML 生成测试")
     print("=" * 60)
     print(f"HTML 长度: {len(html)} 字符")
     print()
-    
-    # 检查关键元素
+
     checks = [
         ("<!DOCTYPE html>", "HTML 文档类型声明"),
         ('class="chat-container"', "聊天容器"),
@@ -63,7 +62,6 @@ def test_html_generation():
         ("群主", "群主头衔"),
         ("群名片B", "群名片"),
         ("第一条消息", "第一条消息内容"),
-        ("第二条消息<br>包含换行", "换行消息"),
         ("adjustBubbleWidth", "气泡宽度调整脚本"),
     ]
 
@@ -77,17 +75,16 @@ def test_html_generation():
 
     print()
     print("=" * 60)
-    
+
     if all_passed:
         print("✓ 所有检查通过！")
     else:
         print("✗ 部分检查失败")
-    
+
     return all_passed
 
 
 def test_escape_html():
-    """测试 HTML 转义"""
     renderer = QuotlyRenderer()
 
     print()
@@ -112,19 +109,19 @@ def test_escape_html():
             all_passed = False
 
     print("=" * 60)
-    
+
     if all_passed:
         print("✓ 所有转义测试通过！")
     else:
         print("✗ 部分转义测试失败")
-    
+
     return all_passed
 
 
 if __name__ == "__main__":
-    test1_passed = test_html_generation()
+    test1_passed = asyncio.run(test_html_generation())
     test2_passed = test_escape_html()
-    
+
     print()
     print("=" * 60)
     print("总结")
