@@ -318,6 +318,25 @@ class MessageProvider:
 
         return result
 
+    def _filter_valid_messages(self, messages: list) -> list:
+        """
+        过滤掉非标准消息（系统通知、拍一拍、撤回提示等）
+
+        Args:
+            messages: 消息列表
+
+        Returns:
+            仅包含标准消息的列表
+        """
+        valid_messages = []
+        for msg in messages:
+            msg_content = msg.get("message", [])
+            if not self.parser.is_non_standard_message(msg_content):
+                valid_messages.append(msg)
+            else:
+                logger.debug(f"过滤非标准消息: message_id={msg.get('message_id')}")
+        return valid_messages
+
     async def get_message_by_id(
         self,
         message_id: int,
@@ -462,10 +481,12 @@ class MessageProvider:
                     ref_msg_data = await self.onebot.get_msg(reference_message_id)
                     if ref_msg_data:
                         ref_time = ref_msg_data.get("time", 0)
+                        ref_msg_id = ref_msg_data.get("message_id", 0)
 
                         newer_messages = [
                             m for m in messages_history
                             if m.get("time", 0) > ref_time
+                            or (m.get("time", 0) == ref_time and m.get("message_id", 0) != ref_msg_id and m.get("message_id", 0) > ref_msg_id)
                         ]
 
                         if filter_user_id:
@@ -504,7 +525,7 @@ class MessageProvider:
             group_id: 群号
             count: 获取数量
             filter_user_id: 过滤指定用户 ID
-            pick_indices: 精选消息序号列表
+            pick_indices: 精选消息序号列表（基于过滤后的标准消息序列，1起始）
 
         Returns:
             (消息列表, 错误信息)
@@ -530,7 +551,10 @@ class MessageProvider:
         used_advanced_query = False
         if need_more and group_id:
             mr_api = await self.get_message_recorder_api()
-            
+
+            # --pick 使用时不预过滤用户，让索引对应完整标准消息序列
+            fetch_filter_user = None if pick_indices else filter_user_id
+
             if pick_indices:
                 fetch_count = 100
             elif filter_user_id and mr_api:
@@ -539,12 +563,17 @@ class MessageProvider:
             elif filter_user_id:
                 fetch_count = count * 5
             else:
-                fetch_count = count - 1
+                # 额外缓冲以补偿被过滤掉的非标准消息
+                fetch_count = max(count * 2, count + 20)
             fetch_count = min(fetch_count, 100)
 
             newer_messages = await self.get_messages_after(
-                reply_id, group_id, fetch_count, filter_user_id
+                reply_id, group_id, fetch_count, fetch_filter_user
             )
+
+            # 过滤掉非标准消息（拍一拍、撤回通知、系统消息等）
+            newer_messages = self._filter_valid_messages(newer_messages)
+            logger.debug(f"过滤非标准消息后: {len(newer_messages)} 条有效消息")
 
             if pick_indices:
                 need_count = max(pick_indices) - 1
@@ -572,8 +601,9 @@ class MessageProvider:
                 m for m in messages_data
                 if m.get("sender", {}).get("user_id") == filter_user_id
             ]
+            # 取前 count 条，保持消息连续性（不再丢弃中间消息）
             if count > 1 and len(messages_data) > count:
-                messages_data = [messages_data[0]] + messages_data[-(count - 1):]
+                messages_data = messages_data[:count]
 
             if not messages_data:
                 return [], f"未找到该用户（QQ: {filter_user_id}）的消息"

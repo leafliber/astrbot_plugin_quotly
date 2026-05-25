@@ -173,6 +173,14 @@ class MessageParser:
 
         return "".join(text_parts).strip(), reply_id
 
+    NON_RENDERABLE_TYPES = frozenset({
+        "poke", "touch", "shake", "flash", "markdown",
+    })
+
+    SYSTEM_MESSAGE_TYPES = frozenset({
+        "poke", "touch", "shake", "recall",
+    })
+
     def _parse_onebot_segment(self, segment: dict, text_parts: list):
         """解析 OneBot11 格式消息段"""
         seg_type = segment.get("type")
@@ -195,6 +203,92 @@ class MessageParser:
             text_parts.append("[视频]")
         elif seg_type == "at":
             text_parts.append(f"@{seg_data.get('name', '')}")
+        elif seg_type == "poke":
+            text_parts.append("[拍一拍]")
+        elif seg_type == "touch":
+            text_parts.append("[戳一戳]")
+        elif seg_type == "shake":
+            text_parts.append("[窗口抖动]")
+        elif seg_type == "json":
+            text_parts.append("[卡片消息]")
+        elif seg_type == "xml":
+            text_parts.append("[卡片消息]")
+        elif seg_type == "forward":
+            text_parts.append("[转发消息]")
+        elif seg_type == "file":
+            name = seg_data.get("name", "")
+            text_parts.append(f"[文件: {name}]" if name else "[文件]")
+        elif seg_type == "location":
+            text_parts.append("[位置分享]")
+        elif seg_type == "music":
+            text_parts.append("[音乐分享]")
+        elif seg_type == "red_bag":
+            title = seg_data.get("title", "")
+            text_parts.append(f"[红包: {title}]" if title else "[红包]")
+        elif seg_type == "reply":
+            pass
+        elif seg_type in self.NON_RENDERABLE_TYPES:
+            pass
+
+    def is_non_standard_message(self, message) -> bool:
+        """
+        判断消息是否为非标准消息（系统通知、拍一拍等），应从语录中排除
+
+        判定规则：
+        1. 消息为空或非列表 → 排除
+        2. 消息中所有段均为系统类型（poke/touch/shake/recall 等）→ 排除
+        3. 消息中没有任何可渲染内容 → 排除
+        4. 包含 reply 段的消息视为标准消息（用户回复行为）
+
+        Args:
+            message: OneBot11 格式的 message 数组
+
+        Returns:
+            True 表示应排除，False 表示为正常消息
+        """
+        if not message or not isinstance(message, (list, tuple)):
+            return True
+
+        if len(message) == 0:
+            return True
+
+        has_renderable = False
+        has_reply = False
+        for segment in message:
+            if not isinstance(segment, dict):
+                if hasattr(segment, 'type'):
+                    seg_type = self._get_segment_type(segment)
+                    if seg_type == "reply":
+                        has_reply = True
+                        continue
+                    if seg_type not in self.SYSTEM_MESSAGE_TYPES:
+                        has_renderable = True
+                        break
+                continue
+
+            seg_type = segment.get("type", "")
+
+            if seg_type == "reply":
+                has_reply = True
+                continue
+
+            if seg_type in self.SYSTEM_MESSAGE_TYPES:
+                continue
+
+            if seg_type in ("text", "image", "face", "mface", "record", "video",
+                            "at", "json", "xml", "forward", "file", "location",
+                            "music", "red_bag"):
+                has_renderable = True
+                break
+
+            if seg_type not in self.NON_RENDERABLE_TYPES:
+                has_renderable = True
+                break
+
+        if has_reply:
+            return False
+
+        return not has_renderable
 
     def _parse_obj_segment(self, segment, text_parts: list):
         """解析对象形式的消息段"""

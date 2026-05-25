@@ -41,6 +41,7 @@ INTERNAL_HOST = "local-resource.internal"
 
 PAGE_POOL_SIZE = 3
 AVATAR_MEMORY_CACHE_SIZE = 200
+AVATAR_DISK_CACHE_TTL = 86400
 
 
 class LRUCache:
@@ -371,9 +372,13 @@ class QuotlyRenderer:
         disk_path = self._avatars_dir / cache_key
         if disk_path.exists():
             try:
-                avatar_data = disk_path.read_bytes()
-                await QuotlyRenderer._avatar_cache.set(cache_key, avatar_data)
-                return
+                mtime = disk_path.stat().st_mtime
+                if time.time() - mtime < AVATAR_DISK_CACHE_TTL:
+                    avatar_data = disk_path.read_bytes()
+                    await QuotlyRenderer._avatar_cache.set(cache_key, avatar_data)
+                    return
+                else:
+                    logger.debug(f"头像磁盘缓存已过期，将重新下载: {url[:50]}...")
             except Exception as e:
                 logger.debug(f"读取磁盘头像缓存失败: {e}")
 
@@ -407,7 +412,12 @@ class QuotlyRenderer:
 
         disk_path = self._avatars_dir / cache_key
         if disk_path.exists():
-            return f"http://{INTERNAL_HOST}/avatars/{cache_key}"
+            try:
+                mtime = disk_path.stat().st_mtime
+                if time.time() - mtime < AVATAR_DISK_CACHE_TTL:
+                    return f"http://{INTERNAL_HOST}/avatars/{cache_key}"
+            except Exception:
+                pass
 
         cached = await QuotlyRenderer._avatar_cache.get(cache_key)
         if cached:
