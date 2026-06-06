@@ -52,23 +52,17 @@ class QuotlyPlugin(Star):
         self.qrandom_trigger = ""
         self._load_config()
 
-        self._font_init_task = asyncio.create_task(self._init_fonts_and_browser())
+        self._font_init_task = asyncio.create_task(self._init_fonts())
 
         logger.info("Quotly 插件已加载")
 
-    async def _init_fonts_and_browser(self):
-        """初始化字体文件和浏览器（后台任务）"""
+    async def _init_fonts(self):
+        """初始化字体文件（后台任务）"""
         try:
             await self.renderer.ensure_fonts()
             logger.info("字体初始化完成")
         except Exception as e:
             logger.warning(f"字体初始化失败: {e}")
-
-        try:
-            await self.renderer._ensure_browser()
-            logger.info("浏览器预启动完成")
-        except Exception as e:
-            logger.warning(f"浏览器预启动失败: {e}")
 
     def _load_config(self):
         trigger_words = self.config.get("trigger_words", {})

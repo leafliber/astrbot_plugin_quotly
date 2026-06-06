@@ -31,6 +31,7 @@ Quotly 是一款专为 AstrBot 的QQ适配器设计的语录图片生成插件�
 - **🎯 相似语录检测** - 基于感知哈希算法，自动识别并提示相似语录，避免重复保存
 - **📝 OCR 文字识别** - 可选启用图片 OCR，让语录中的图片文字也能被搜索到
 - **⚡ 自定义触发词** - 支持设置无斜杠触发词，让使用更加便捷
+- **🪶 轻量渲染引擎** - 使用 html2pic 替代 Playwright，无需安装浏览器，pip 即装即用
 
 ---
 
@@ -38,13 +39,13 @@ Quotly 是一款专为 AstrBot 的QQ适配器设计的语录图片生成插件�
 
 ### 安装依赖
 
-⚠️ 本插件依赖 **Playwright** 浏览器渲染引擎，安装插件后需要手动执行：
+本插件使用 **html2pic** 作为渲染引擎，基于 Skia + Taffy + HarfBuzz，纯 Python pip 安装，**无需安装浏览器或任何系统依赖**：
 
 ```bash
-playwright install --with-deps chromium
+pip install -r requirements.txt
 ```
 
-> 如果 AstrBot 运行在 Docker 容器中，请确保容器内已安装 Chromium 浏览器，可通过exec指令安装playwright依赖。
+> 即装即用，不需要额外执行 `playwright install` 或安装 Chromium。
 
 ### 推荐安装消息记录器
 
@@ -57,16 +58,15 @@ playwright install --with-deps chromium
 
 > 如果未安装 message_recorder 插件，Quotly 会自动降级使用 OneBot API 获取消息，功能不受影响但仅支持 QQ 平台。
 
-### 最低配置要求
-
-由于插件使用 Playwright 进行浏览器渲染，对系统资源有一定要求：
+### 系统要求
 
 | 项目 | 最低要求 | 推荐配置 |
 |------|---------|---------|
 | **操作系统** | Linux / macOS / Windows | Linux (Ubuntu 20.04+) / macOS 11+ |
-| **内存** | 512 MB 可用内存 | 1 GB+ 可用内存 |
-| **磁盘空间** | 300 MB（含浏览器） | 500 MB+ |
+| **内存** | 128 MB 可用内存 | 256 MB+ 可用内存 |
+| **磁盘空间** | 50 MB | 100 MB+ |
 
+> v1.1 起不再依赖 Playwright/Chromium，磁盘占用从 ~300MB 降至 ~50MB。
 
 ### 基础用法
 
@@ -154,7 +154,7 @@ playwright install --with-deps chromium
 
 特别感谢：
 - **AstrBot** 团队提供的优秀插件开发框架
-- **Playwright** 项目带来的强大浏览器自动化能力
+- **html2pic** 项目提供的轻量 HTML 渲染能力
 - **HarmonyOS Sans** 字体带来的清晰中文渲染体验
 
 ---

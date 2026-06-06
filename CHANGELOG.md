@@ -5,6 +5,48 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 并且本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-06-06
+
+### 💥 重大变更
+
+- **渲染引擎替换**：移除 Playwright + Chromium 依赖，改用 [html2pic](https://github.com/francozanardi/html2pic)（基于 Skia + Taffy + HarfBuzz）
+  - 磁盘占用从 ~300MB 降至 ~50MB
+  - 无需安装浏览器或任何系统级依赖
+  - 渲染速度基本持平（~1 秒/次）
+  - 内存占用大幅降低
+
+### 新增
+
+- 🪶 **轻量渲染引擎**：html2pic 纯 pip 安装，即装即用
+- 🔵 **抗锯齿圆形头像**：使用 4x 超采样 + LANCZOS 缩放，头像边缘平滑无锯齿
+- 🎨 **渐变色头像占位符**：无头像用户显示渐变色圆形头像 + 姓氏首字
+
+### 移除
+
+- ❌ Playwright 浏览器依赖（`playwright>=1.40.0`）
+- ❌ 浏览器实例管理（页面池、路由拦截、浏览器启动/关闭）
+- ❌ JS 气泡宽度动态计算脚本
+
+### 技术细节
+
+渲染流程变更：
+
+1. 旧：Playwright 打开页面 → 加载 HTML → JS 计算宽度 → 截图
+2. 新：html2pic 构建 HTML+CSS → Skia 渲染 → Pillow 后处理（圆形头像裁剪）
+
+html2pic CSS 适配：
+
+| 原始 CSS | 适配后 | 原因 |
+|---|---|---|
+| `background: #fff` | `background-color: #fff` | html2pic 不支持 `background` 简写 |
+| `border-radius: 50%` | Pillow 后处理圆形裁剪 | html2pic 在 flex 布局中 border-radius 不裁剪背景 |
+| `border-left: 3px solid` | 移除 | html2pic 不支持 |
+| `width: fit-content` | 移除，用 min/max-width | html2pic 不支持 |
+| `↩` 字符 | 移除 | html2pic 渲染不支持的 Unicode 字符会崩溃 |
+| `white-space: pre-wrap` | Python 中 `\n` → `<br>` | html2pic 不支持 |
+
+---
+
 ## [1.0.0] - 2026-04-02
 
 ### 新增
