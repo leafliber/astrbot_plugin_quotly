@@ -608,6 +608,10 @@ class MessageProvider:
             if not messages_data:
                 return [], f"未找到该用户（QQ: {filter_user_id}）的消息"
 
+        # 裁剪到请求的数量（reply_msg + count-1 条后续消息）
+        if not pick_indices and len(messages_data) > count:
+            messages_data = messages_data[:count]
+
         return messages_data, None
 
     def reset(self):
