@@ -39,13 +39,68 @@ Quotly 是一款专为 AstrBot 的QQ适配器设计的语录图片生成插件�
 
 ### 安装依赖
 
-本插件使用 **html2pic** 作为渲染引擎，基于 Skia + Taffy + HarfBuzz，纯 Python pip 安装，**无需安装浏览器或任何系统依赖**：
-
 ```bash
 pip install -r requirements.txt
 ```
 
-> 即装即用，不需要额外执行 `playwright install` 或安装 Chromium。
+> 本插件使用 **html2pic**（基于 Skia + Taffy + HarfBuzz）作为渲染引擎，无需安装浏览器。  
+> 首次运行时会自动从 CDN 下载 HarmonyOS Sans SC 字体文件。
+
+### 系统依赖
+
+html2pic 底层依赖 Skia（图形渲染）和 fontconfig（字体发现），在部分 Linux 环境下需要手动安装系统库。
+
+#### Debian / Ubuntu
+
+```bash
+sudo apt-get update && sudo apt-get install -y \
+    libfontconfig1 \
+    libgl1 \
+    libx11-6 \
+    libx11-6
+```
+
+> Ubuntu 22.04 及更早版本使用 `libgl1-mesa-glx` 替代 `libgl1`。
+
+#### Alpine Linux（常见于 Docker 精简镜像）
+
+```bash
+apk add --no-cache \
+    fontconfig \
+    mesa-gl \
+    libx11 \
+    libxext
+```
+
+#### CentOS / RHEL / Fedora
+
+```bash
+sudo yum install -y \
+    fontconfig \
+    mesa-libGL \
+    libX11 \
+    libXext
+```
+
+#### macOS / Windows
+
+无需额外安装系统依赖，pip 安装后即可使用。
+
+#### Docker
+
+若 AstrBot 运行在 Docker 中，在 `Dockerfile` 中添加系统依赖：
+
+```dockerfile
+# Debian/Ubuntu 基础镜像
+RUN apt-get update && apt-get install -y \
+    libfontconfig1 libgl1 libx11-6 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Alpine 基础镜像
+# RUN apk add --no-cache fontconfig mesa-gl libx11 libxext
+```
+
+> 如果遇到 `ImportError`、`libSkia*.so not found` 或渲染报错，请先确认已安装上述系统依赖。详见下方 [常见问题](#-常见问题) 章节。
 
 ### 推荐安装消息记录器
 
@@ -65,8 +120,7 @@ pip install -r requirements.txt
 | **操作系统** | Linux / macOS / Windows | Linux (Ubuntu 20.04+) / macOS 11+ |
 | **内存** | 128 MB 可用内存 | 256 MB+ 可用内存 |
 | **磁盘空间** | 50 MB | 100 MB+ |
-
-> v1.1 起不再依赖 Playwright/Chromium，磁盘占用从 ~300MB 降至 ~50MB。
+| **系统库** (仅 Linux) | fontconfig, OpenGL/GLX, libX11 | 见上方安装命令 |
 
 ### 基础用法
 
@@ -145,6 +199,42 @@ pip install -r requirements.txt
 ## 🎯 效果预览
 
 <img src="docs/example.png" width="300" alt="Example"/>
+
+---
+
+## ❓ 常见问题
+
+### Linux 下 `pip install` 报错 / 渲染失败
+
+html2pic 依赖 Skia 图形库，Linux 上需要 fontconfig 和 OpenGL 相关系统库。请按照上方 [系统依赖](#系统依赖) 章节安装对应包后重试。
+
+典型错误信息：
+- `ImportError: libSkia.so: cannot open shared object file`
+- `OSError: Cannot load Skia library`
+- 渲染时报 `Skia error` 或空白输出
+
+### Docker 容器内渲染失败
+
+精简 Docker 镜像（如 `python:3.12-slim`、`alpine`）通常缺少图形库。在 `Dockerfile` 中添加：
+
+```dockerfile
+# Debian/Ubuntu 基础镜像
+RUN apt-get update && apt-get install -y \
+    libfontconfig1 libgl1 libx11-6 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+### 字体显示为方块 / 乱码
+
+插件首次运行时会从 CDN 自动下载 HarmonyOS Sans SC 字体。如果服务器无法访问外网（`cdn.jsdelivr.net`），可手动下载字体文件：
+
+| 字体 | 下载地址 |
+|------|---------|
+| HarmonyOS_Sans_SC_Regular.ttf | [下载](https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Regular.ttf) |
+| HarmonyOS_Sans_SC_Medium.ttf | [下载](https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Medium.ttf) |
+| HarmonyOS_Sans_SC_Bold.ttf | [下载](https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Bold.ttf) |
+
+将字体文件放入 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_quotly/fonts/` 文件夹即可。
 
 ---
 

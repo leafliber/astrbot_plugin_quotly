@@ -120,7 +120,11 @@ class QuotlyRenderer:
                         ]
                         await asyncio.gather(*download_tasks, return_exceptions=True)
                 except Exception as e:
-                    logger.error(f"字体下载过程出错: {e}")
+                    logger.error(
+                        f"字体下载失败（无法连接 cdn.jsdelivr.net）: {e}\n"
+                        "可手动下载字体文件放入 data/plugin_data/astrbot_plugin_quotly/fonts/ 目录，"
+                        "详见 README「字体显示为方块 / 乱码」章节。"
+                    )
 
             all_exist = all((self._fonts_dir / f).exists() for f in FONT_DOWNLOAD_URLS)
             if all_exist:
@@ -187,16 +191,36 @@ class QuotlyRenderer:
         html, css, avatar_data_list = self._build_html_and_css(messages, show_title=show_title, show_time=show_time,
                                               show_date=show_date)
 
-        from html2pic import Html2Pic
-        from pictex import CropMode
-        renderer = Html2Pic(html, css)
-        image = renderer.render(crop_mode=CropMode.CONTENT_BOX)
+        try:
+            from html2pic import Html2Pic
+            from pictex import CropMode
+        except ImportError as e:
+            raise ImportError(
+                f"html2pic 导入失败: {e}\n"
+                "请确认已执行 pip install -r requirements.txt。\n"
+                "Linux 用户可能需要先安装系统依赖，详见 README「系统依赖」章节。"
+            ) from e
+
+        try:
+            renderer = Html2Pic(html, css)
+            image = renderer.render(crop_mode=CropMode.CONTENT_BOX)
+        except Exception as e:
+            raise RuntimeError(
+                f"html2pic 渲染失败: {e}\n"
+                "Linux/Docker 用户请确认已安装 fontconfig 和 OpenGL 系统库，详见 README「系统依赖」章节。"
+            ) from e
 
         import io
         from PIL import Image, ImageDraw, ImageFont
         import numpy as np
 
-        pil_image = image.to_pillow().convert("RGBA")
+        try:
+            pil_image = image.to_pillow().convert("RGBA")
+        except Exception as e:
+            raise RuntimeError(
+                f"图像转换失败: {e}\n"
+                "请确认 Pillow 和 numpy 已正确安装（pip install Pillow numpy）。"
+            ) from e
 
         # 后处理：将方形头像标记替换为圆形头像
         if avatar_data_list:
