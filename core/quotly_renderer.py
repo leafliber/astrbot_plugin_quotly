@@ -11,7 +11,6 @@ html2pic 基于 Skia + Taffy + HarfBuzz，纯 pip 安装，无需浏览器。
 
 import asyncio
 import hashlib
-import math
 import pathlib
 import time
 from collections import OrderedDict
@@ -499,10 +498,44 @@ class QuotlyRenderer:
         output = output.resize((size, size), Image.LANCZOS)
         return output
 
-    @staticmethod
-    def _create_gradient_avatar(initial: str, size: int):
+    def _load_font(self, size: int):
+        """加载字体：优先已下载的 HarmonyOS Sans SC，回退系统 CJK 字体"""
+        from PIL import ImageFont
+
+        # 优先使用已下载的 HarmonyOS Sans SC Medium（适中粗细适合头像首字）
+        if hasattr(self, '_fonts_dir'):
+            medium_path = self._fonts_dir / "HarmonyOS_Sans_SC_Medium.ttf"
+            if medium_path.exists():
+                try:
+                    return ImageFont.truetype(str(medium_path), size)
+                except Exception:
+                    pass
+
+        # 回退系统 CJK 字体
+        font_candidates = [
+            # Windows
+            "msyh.ttc",       # 微软雅黑
+            "msyhbd.ttc",     # 微软雅黑粗体
+            "simhei.ttf",     # 黑体
+            # macOS
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/PingFang.ttc",
+            # Linux
+            "NotoSansCJK-Regular.ttc",
+            "WenQuanYiMicroHei.ttf",
+            "DroidSansFallbackFull.ttf",
+        ]
+        for name in font_candidates:
+            try:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def _create_gradient_avatar(self, initial: str, size: int):
         """创建渐变色头像（带首字），size 可以是超采样尺寸"""
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw
 
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -518,13 +551,7 @@ class QuotlyRenderer:
 
         # 绘制首字（字号按 size 缩放）
         font_size = max(int(size * 0.35), 12)
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/STHeiti Medium.ttc", font_size)
-        except Exception:
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", font_size)
-            except Exception:
-                font = ImageFont.load_default()
+        font = self._load_font(font_size)
 
         bbox = draw.textbbox((0, 0), initial, font=font)
         tw = bbox[2] - bbox[0]
