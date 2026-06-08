@@ -260,6 +260,10 @@ class QuotlyRenderer:
         if not url or url.startswith('data:'):
             return
 
+        # Local file path - no download needed
+        if Path(url).is_file():
+            return
+
         cache_key = prefix + self._avatar_cache_key(url)
 
         disk_path = self._avatars_dir / cache_key
@@ -420,8 +424,40 @@ class QuotlyRenderer:
         return html, css, avatar_data_list
 
     def _get_local_image_path(self, url: str) -> str:
-        if not url or url.startswith('data:'):
+        if not url:
+            return ""
+
+        # Local file path - use directly
+        if Path(url).is_file():
             return url
+
+        # data: URL - save to file for html2pic compatibility
+        if url.startswith('data:'):
+            try:
+                import base64
+                import re
+                match = re.match(r'data:([^;]+);base64,(.+)', url, re.DOTALL)
+                if match:
+                    mime = match.group(1)
+                    b64_data = match.group(2)
+                    ext = {
+                        'image/png': '.png',
+                        'image/jpeg': '.jpg',
+                        'image/gif': '.gif',
+                        'image/webp': '.webp',
+                    }.get(mime, '.png')
+
+                    cache_key = self._avatar_cache_key(url)
+                    disk_path = self._avatars_dir / f"{cache_key}{ext}"
+
+                    if not disk_path.exists():
+                        img_data = base64.b64decode(b64_data)
+                        disk_path.write_bytes(img_data)
+
+                    return str(disk_path)
+            except Exception as e:
+                logger.debug(f"保存 data URL 图片失败: {e}")
+            return ""
 
         cache_key = self._avatar_cache_key(url)
         disk_path = self._avatars_dir / cache_key

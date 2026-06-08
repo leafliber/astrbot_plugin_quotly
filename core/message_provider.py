@@ -250,33 +250,11 @@ class MessageProvider:
                     from pathlib import Path
                     if isinstance(local_path, Path):
                         local_path = str(local_path)
-                    
+
                     abs_path = self._mr_api.get_media_absolute_path(local_path)
-                    if abs_path:
-                        try:
-                            import base64
-                            from pathlib import Path as PathLib
-                            path_obj = PathLib(abs_path)
-                            if path_obj.exists():
-                                with open(path_obj, "rb") as f:
-                                    img_data = f.read()
-                                img_base64 = base64.b64encode(img_data).decode("utf-8")
-                                suffix = path_obj.suffix.lower().lstrip(".") or "png"
-                                mime_type = {
-                                    "png": "image/png",
-                                    "jpg": "image/jpeg",
-                                    "jpeg": "image/jpeg",
-                                    "gif": "image/gif",
-                                    "webp": "image/webp",
-                                    "bmp": "image/bmp",
-                                }.get(suffix, "image/png")
-                                ob_segment["data"]["url"] = f"data:{mime_type};base64,{img_base64}"
-                                ob_segment["data"]["local_path"] = abs_path
-                            else:
-                                ob_segment["data"]["url"] = original_url
-                        except Exception as e:
-                            logger.warning(f"读取本地图片失败: {e}")
-                            ob_segment["data"]["url"] = original_url
+                    if abs_path and Path(abs_path).exists():
+                        ob_segment["data"]["url"] = abs_path
+                        ob_segment["data"]["local_path"] = abs_path
                     else:
                         ob_segment["data"]["url"] = original_url
                 elif media_url:
