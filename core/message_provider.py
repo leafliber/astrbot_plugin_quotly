@@ -245,25 +245,27 @@ class MessageProvider:
                 local_path = segment.get("local_path", "")
                 media_url = segment.get("media_url", "")
                 original_url = segment.get("url", "") or segment.get("file", "")
-                
-                if local_path and self._mr_api:
-                    from pathlib import Path
-                    if isinstance(local_path, Path):
-                        local_path = str(local_path)
 
-                    abs_path = self._mr_api.get_media_absolute_path(local_path)
-                    if abs_path and Path(abs_path).exists():
-                        ob_segment["data"]["url"] = abs_path
-                        ob_segment["data"]["local_path"] = abs_path
-                    else:
-                        ob_segment["data"]["url"] = original_url
-                elif media_url:
-                    base_url = getattr(self._mr_api, "web_base_url", "") if self._mr_api else ""
-                    if base_url:
-                        ob_segment["data"]["url"] = f"{base_url.rstrip('/')}{media_url}"
-                    else:
-                        ob_segment["data"]["url"] = original_url
-                else:
+                resolved = False
+                if self._mr_api:
+                    from pathlib import Path as PathLib
+                    # 按优先级尝试多个路径候选，获取 message_recorder 已下载的本地文件
+                    candidates = []
+                    if local_path:
+                        candidates.append(str(local_path) if isinstance(local_path, PathLib) else local_path)
+                    if media_url:
+                        # media_url 可能是 web 路径，尝试提取相对路径
+                        candidates.append(media_url.lstrip('/'))
+
+                    for candidate in candidates:
+                        abs_path = self._mr_api.get_media_absolute_path(candidate)
+                        if abs_path and abs_path.exists():
+                            ob_segment["data"]["url"] = str(abs_path)
+                            ob_segment["data"]["local_path"] = str(abs_path)
+                            resolved = True
+                            break
+
+                if not resolved:
                     ob_segment["data"]["url"] = original_url
                 ob_segment["data"]["file"] = segment.get("file", "")
             elif mr_type == "Face":

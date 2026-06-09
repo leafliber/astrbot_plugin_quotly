@@ -175,17 +175,45 @@ class QuotlyPlugin(Star):
 
     async def _download_and_hash_image(self, image_url: str) -> str:
         """
-        下载图片并计算hash
+        下载（或读取本地）图片并计算hash
 
         Args:
-            image_url: 图片URL
+            image_url: 图片 URL 或本地文件路径
 
         Returns:
             图片hash值，失败返回空字符串
         """
         try:
+            # 本地文件路径：直接读取
+            from pathlib import Path as PathLib
+            local_path = PathLib(image_url)
+            if local_path.is_file():
+                image_data = local_path.read_bytes()
+                image_hash = compute_phash(image_data)
+                if image_hash:
+                    logger.debug(f"本地图片hash计算成功: {image_hash}")
+                    return image_hash
+                else:
+                    logger.warning("本地图片hash计算失败")
+                    return ""
+
+            # data: URL：解码 base64
+            if image_url.startswith('data:'):
+                import base64
+                import re
+                match = re.match(r'data:[^;]+;base64,(.+)', image_url, re.DOTALL)
+                if match:
+                    image_data = base64.b64decode(match.group(1))
+                    image_hash = compute_phash(image_data)
+                    if image_hash:
+                        logger.debug(f"data URL 图片hash计算成功: {image_hash}")
+                        return image_hash
+                logger.warning("data URL 图片hash计算失败")
+                return ""
+
+            # 远程 URL：下载
             import aiohttp
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:
@@ -198,11 +226,11 @@ class QuotlyPlugin(Star):
                             logger.warning("图片hash计算失败")
                     else:
                         logger.warning(f"下载图片失败: HTTP {resp.status}")
-            
+
             return ""
-            
+
         except Exception as e:
-            logger.warning(f"下载图片失败: {e}")
+            logger.warning(f"获取图片失败: {e}")
             return ""
 
     async def _background_ocr_update(self, image_hash: str, ocr_tasks_data: list, storage_messages: list, umo: str):

@@ -493,12 +493,14 @@ class QuotlyRenderer:
         groups.append((start, prev))
 
         # 合并相邻的组（同一个头像可能被 html2pic 渲染成多段）
+        # 阈值用 AVATAR_SIZE//2 而非 AVATAR_SIZE：短消息时相邻头像间隙约 73px，
+        # 若用 80 会把两条消息的头像错误合并为一组，导致第二个头像不被替换。
+        merge_gap = AVATAR_SIZE // 2
         merged = []
         i = 0
         while i < len(groups):
             sy, ey = groups[i]
-            # 检查下一个组是否紧密相邻（间距 < AVATAR_SIZE）
-            while i + 1 < len(groups) and groups[i + 1][0] - ey < AVATAR_SIZE:
+            while i + 1 < len(groups) and groups[i + 1][0] - ey < merge_gap:
                 i += 1
                 ey = groups[i][1]
             merged.append((sy, ey))
