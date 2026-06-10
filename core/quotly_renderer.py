@@ -296,7 +296,7 @@ class QuotlyRenderer:
                             logger.debug(f"写入磁盘缓存失败: {e}")
                         logger.debug(f"预加载图片: {url[:50]}...")
         except Exception as e:
-            logger.debug(f"预加载图片失败: {url[:50]}..., 错误: {e}")
+            logger.warning(f"预加载图片失败: {url[:80]}..., 错误: {e}")
 
     def _get_avatar_src(self, url: str) -> str:
         if not url:
@@ -395,11 +395,11 @@ class QuotlyRenderer:
 
             if is_image_only and not reply_html:
                 bubble_class = "bubble image-only"
-                image_src = self._get_local_image_path(image_url)
-                if image_src:
-                    content_html = f'<div class="msg-image-full" style="background-image: url(\'{image_src}\');"></div>'
+                image_data_url = self._get_image_data_url(image_url)
+                if image_data_url:
+                    content_html = f'<img class="msg-image-full" src="{image_data_url}">'
                 else:
-                    content_html = '<span>[图片]</span>'
+                    content_html = '<div class="image-fallback">[图片]</div>'
             else:
                 content_html_parsed, _ = self._parse_content(content)
                 content_html = f'<div class="message-content">{content_html_parsed}</div>'
@@ -427,37 +427,12 @@ class QuotlyRenderer:
         if not url:
             return ""
 
+        if url.startswith('data:'):
+            return ""
+
         # Local file path - use directly
         if Path(url).is_file():
             return url
-
-        # data: URL - save to file for html2pic compatibility
-        if url.startswith('data:'):
-            try:
-                import base64
-                import re
-                match = re.match(r'data:([^;]+);base64,(.+)', url, re.DOTALL)
-                if match:
-                    mime = match.group(1)
-                    b64_data = match.group(2)
-                    ext = {
-                        'image/png': '.png',
-                        'image/jpeg': '.jpg',
-                        'image/gif': '.gif',
-                        'image/webp': '.webp',
-                    }.get(mime, '.png')
-
-                    cache_key = self._avatar_cache_key(url)
-                    disk_path = self._avatars_dir / f"{cache_key}{ext}"
-
-                    if not disk_path.exists():
-                        img_data = base64.b64decode(b64_data)
-                        disk_path.write_bytes(img_data)
-
-                    return str(disk_path)
-            except Exception as e:
-                logger.debug(f"保存 data URL 图片失败: {e}")
-            return ""
 
         cache_key = self._avatar_cache_key(url)
         disk_path = self._avatars_dir / cache_key
@@ -465,6 +440,40 @@ class QuotlyRenderer:
             return str(disk_path)
 
         return ""
+
+    def _get_image_data_url(self, url: str) -> str:
+        """将图片转为 data URL，用于 html2pic 内嵌（html2pic 不支持本地文件路径）"""
+        if not url:
+            return ""
+
+        if url.startswith('data:'):
+            return url
+
+        local_path = self._get_local_image_path(url)
+        if not local_path:
+            return ""
+
+        try:
+            data = Path(local_path).read_bytes()
+            mime = self._detect_image_mime(data)
+            import base64
+            b64 = base64.b64encode(data).decode('ascii')
+            return f"data:{mime};base64,{b64}"
+        except Exception as e:
+            logger.debug(f"转换图片为 data URL 失败: {e}")
+        return ""
+
+    @staticmethod
+    def _detect_image_mime(data: bytes) -> str:
+        if data[:8] == b'\x89PNG\r\n\x1a\n':
+            return "image/png"
+        elif data[:2] == b'\xff\xd8':
+            return "image/jpeg"
+        elif len(data) > 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+            return "image/webp"
+        elif data[:6] in (b'GIF87a', b'GIF89a'):
+            return "image/gif"
+        return "image/png"
 
     @staticmethod
     def _find_avatar_markers(arr: "np.ndarray", marker_rgb: "np.ndarray") -> List[Tuple[int, int]]:
@@ -740,26 +749,35 @@ class QuotlyRenderer:
 
         .msg-image {{
             max-width: 600px;
-            min-width: 300px;
+            min-width: 150px;
             max-height: 800px;
             border-radius: 8px;
             margin-top: 8px;
-            background-size: contain;
-            background-position: center;
-            background-repeat: no-repeat;
+            display: block;
         }}
 
         .bubble.image-only {{
             padding: 0;
-            line-height: 0;
+            overflow: hidden;
         }}
 
         .msg-image-full {{
-            width: 600px;
+            max-width: 600px;
             max-height: 800px;
             border-radius: 24px;
-            background-size: cover;
-            background-position: center;
+            display: block;
+        }}
+
+        .image-fallback {{
+            padding: 16px 20px;
+            color: #999;
+            font-size: 32px;
+            line-height: 1.4;
+        }}
+
+        .image-fallback-inline {{
+            color: #999;
+            font-size: 28px;
         }}
 
         .reply-preview {{
@@ -793,8 +811,7 @@ class QuotlyRenderer:
             min-width: 50px;
             max-height: 80px;
             border-radius: 4px;
-        }}
-        """
+        }}"""
 
     def _escape_html(self, text: str) -> str:
         if not text:
@@ -819,11 +836,11 @@ class QuotlyRenderer:
                 parts.append(self._text_to_html(text_part))
 
             image_url = match.group(1)
-            image_src = self._get_local_image_path(image_url)
-            if image_src:
-                parts.append(f'<div class="msg-image" style="background-image: url(\'{image_src}\'); width: 300px; height: 200px;"></div>')
+            image_data_url = self._get_image_data_url(image_url)
+            if image_data_url:
+                parts.append(f'<img class="msg-image" src="{image_data_url}">')
             else:
-                parts.append('[图片]')
+                parts.append('<span class="image-fallback-inline">[图片]</span>')
             last_end = match.end()
 
         if last_end < len(content):
