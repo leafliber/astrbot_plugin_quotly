@@ -26,6 +26,21 @@ class QuotlyDatabaseTest:
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
+    @staticmethod
+    def _build_search_text(messages: List[Dict[str, Any]]) -> str:
+        """从消息列表构建可搜索文本"""
+        parts = []
+        for msg in messages:
+            for key in ('nickname', 'card', 'title', 'content', 'ocr_text'):
+                val = msg.get(key, '')
+                if val:
+                    parts.append(val)
+            for key in ('reply_nickname', 'reply_content'):
+                val = msg.get(key, '')
+                if val:
+                    parts.append(val)
+        return ' '.join(parts)
+
     def _init_db(self):
         conn = self._get_conn()
         cursor = conn.cursor()
@@ -36,7 +51,8 @@ class QuotlyDatabaseTest:
                 image_hash TEXT NOT NULL,
                 image_path TEXT NOT NULL,
                 group_id INTEGER,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                search_text TEXT DEFAULT ''
             )
         """)
 
@@ -51,20 +67,12 @@ class QuotlyDatabaseTest:
                 title TEXT,
                 role TEXT,
                 content TEXT,
+                ocr_text TEXT,
                 time_str TEXT,
                 original_time INTEGER,
+                reply_nickname TEXT,
+                reply_content TEXT,
                 FOREIGN KEY (record_id) REFERENCES quotly_records(id) ON DELETE CASCADE
-            )
-        """)
-
-        cursor.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS quotly_search USING fts5(
-                record_id UNINDEXED,
-                nickname,
-                card,
-                title,
-                content,
-                tokenize='unicode61'
             )
         """)
 
@@ -83,23 +91,26 @@ class QuotlyDatabaseTest:
 
         timestamp = int(datetime.now().timestamp())
 
-        image_filename = f"{image_hash}_{timestamp}.png"
+        import hashlib
+        content_hash = hashlib.sha256(image_data).hexdigest()[:32]
+        image_filename = f"{content_hash}.png"
         image_path = self.images_dir / image_filename
         with open(image_path, 'wb') as f:
             f.write(image_data)
 
+        search_text = self._build_search_text(messages)
         cursor.execute("""
-            INSERT INTO quotly_records (image_hash, image_path, group_id, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (image_hash, str(image_path), group_id, timestamp))
+            INSERT INTO quotly_records (image_hash, image_path, group_id, created_at, search_text)
+            VALUES (?, ?, ?, ?, ?)
+        """, (image_hash, str(image_path), group_id, timestamp, search_text))
 
         record_id = cursor.lastrowid
 
         for seq, msg in enumerate(messages):
             cursor.execute("""
-                INSERT INTO quotly_messages 
-                (record_id, seq, user_id, nickname, card, title, role, content, time_str, original_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO quotly_messages
+                (record_id, seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time, reply_nickname, reply_content)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record_id,
                 seq,
@@ -109,19 +120,11 @@ class QuotlyDatabaseTest:
                 msg.get('title'),
                 msg.get('role'),
                 msg.get('content'),
+                msg.get('ocr_text'),
                 msg.get('time_str'),
-                msg.get('original_time')
-            ))
-
-            cursor.execute("""
-                INSERT INTO quotly_search (record_id, nickname, card, title, content)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                record_id,
-                msg.get('nickname', ''),
-                msg.get('card', ''),
-                msg.get('title', ''),
-                msg.get('content', '')
+                msg.get('original_time'),
+                msg.get('reply_nickname'),
+                msg.get('reply_content')
             ))
 
         conn.commit()
@@ -131,14 +134,13 @@ class QuotlyDatabaseTest:
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        base_query = """
-            SELECT DISTINCT r.id, r.image_path, r.image_hash, r.group_id, r.created_at
-            FROM quotly_records r
-            JOIN quotly_messages m ON m.record_id = r.id
-            WHERE (m.nickname LIKE ? OR m.card LIKE ? OR m.title LIKE ? OR m.content LIKE ?)
-        """
         like_pattern = f"%{keyword}%"
-        params = [like_pattern, like_pattern, like_pattern, like_pattern]
+        base_query = """
+            SELECT r.id, r.image_path, r.image_hash, r.group_id, r.created_at
+            FROM quotly_records r
+            WHERE r.search_text LIKE ?
+        """
+        params: list = [like_pattern]
 
         if group_id is not None:
             base_query += " AND r.group_id = ?"
@@ -223,7 +225,7 @@ class QuotlyDatabaseTest:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT seq, user_id, nickname, card, title, role, content, time_str, original_time
+            SELECT seq, user_id, nickname, card, title, role, content, ocr_text, time_str, original_time, reply_nickname, reply_content
             FROM quotly_messages
             WHERE record_id = ?
             ORDER BY seq
@@ -260,9 +262,9 @@ def test_database():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
         images_dir = os.path.join(tmpdir, "images")
-        
+
         db = QuotlyDatabaseTest(db_path, images_dir)
-        
+
         print("1. 测试保存记录...")
         test_messages = [
             {
@@ -272,34 +274,64 @@ def test_database():
                 "title": "测试头衔",
                 "role": "admin",
                 "content": "这是一条测试消息",
+                "ocr_text": "",
                 "time_str": "12:00",
-                "original_time": 1700000000
+                "original_time": 1700000000,
+                "reply_nickname": "",
+                "reply_content": ""
             }
         ]
-        
+
         test_image_data = b"fake_png_data_for_testing"
         record_id = db.save_record("test_hash_123", test_image_data, 123456, test_messages)
         print(f"   记录 ID: {record_id}")
-        
-        print("2. 测试关键词搜索...")
+
+        print("2. 测试中文关键词搜索...")
         results = db.search_by_keyword("测试")
-        print(f"   搜索结果数: {len(results)}")
+        print(f"   搜索 '测试' 结果数: {len(results)}")
+        assert len(results) == 1, f"预期 1 条结果，实际 {len(results)}"
         if results:
             print(f"   第一条记录消息数: {len(results[0]['messages'])}")
             print(f"   消息内容: {results[0]['messages'][0]['content']}")
-        
-        print("3. 测试用户搜索...")
+
+        print("3. 测试多字中文搜索...")
+        results = db.search_by_keyword("测试消息")
+        print(f"   搜索 '测试消息' 结果数: {len(results)}")
+        assert len(results) == 1, f"预期 1 条结果，实际 {len(results)}"
+
+        print("4. 测试名片搜索...")
+        results = db.search_by_keyword("名片")
+        print(f"   搜索 '名片' 结果数: {len(results)}")
+        assert len(results) == 1
+
+        print("5. 测试用户搜索...")
         results = db.search_by_user(12345)
         print(f"   搜索结果数: {len(results)}")
-        
-        print("4. 测试随机获取...")
+
+        print("6. 测试随机获取...")
         results = db.get_random()
         print(f"   随机结果数: {len(results)}")
-        
-        print("5. 测试统计...")
+
+        print("7. 测试统计...")
         stats = db.get_stats()
         print(f"   统计: {stats}")
-        
+
+        print("8. 测试回复信息搜索...")
+        reply_messages = [
+            {
+                "user_id": 54321,
+                "nickname": "用户B",
+                "content": "回复测试",
+                "ocr_text": "",
+                "reply_nickname": "用户A",
+                "reply_content": "原始消息内容"
+            }
+        ]
+        db.save_record("test_hash_reply", b"reply_image_data", 123456, reply_messages)
+        results = db.search_by_keyword("原始消息")
+        print(f"   搜索 '原始消息' (回复内容) 结果数: {len(results)}")
+        assert len(results) == 1
+
         db.close()
         print("\n所有测试通过!")
 

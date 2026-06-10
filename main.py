@@ -21,6 +21,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 import astrbot.api.message_components as Comp
+from quart import request, jsonify, Response
 
 from core.onebot_client import OneBotClient
 from core.message_parser import MessageParser
@@ -28,6 +29,8 @@ from core.quotly_renderer import QuotlyRenderer
 from core.database import QuotlyDatabase
 from core.message_provider import MessageProvider
 from utils.image_hash import compute_phash
+
+PLUGIN_NAME = "astrbot_plugin_quotly"
 
 
 @register("quotly", "Leafiber", "将消息渲染为精美的引用图片", "1.0.0")
@@ -53,6 +56,7 @@ class QuotlyPlugin(Star):
         self._load_config()
 
         self._font_init_task = asyncio.create_task(self._init_fonts())
+        self._register_web_apis()
 
         logger.info("Quotly 插件已加载")
 
@@ -416,7 +420,8 @@ class QuotlyPlugin(Star):
         try:
             render_messages = []
             last_date = None
-            
+            reply_infos = []
+
             for msg_data_item in messages_data:
                 msg_time = msg_data_item.get("time", 0)
                 
@@ -507,6 +512,7 @@ class QuotlyPlugin(Star):
                     "avatar_url": self.message_provider._get_avatar_url(user_id),
                     "reply_info": reply_info
                 })
+                reply_infos.append(reply_info)
 
             png_data = await self.renderer.arender(
                 render_messages, 
@@ -517,7 +523,7 @@ class QuotlyPlugin(Star):
 
             image_hash = compute_phash(png_data) or "unknown"
 
-            duplicate_records = await self.db.find_by_hash(image_hash, threshold=5)
+            duplicate_records = await self.db.find_by_hash(image_hash, threshold=5, group_id=group_id)
             if duplicate_records:
                 duplicate = duplicate_records[0]
                 distance = duplicate.get('hamming_distance', 0)
@@ -543,16 +549,17 @@ class QuotlyPlugin(Star):
 
             storage_messages = []
             ocr_tasks_data = []
-            
+
             for i, msg_data_item in enumerate(messages_data):
                 sender = msg_data_item.get("sender", {})
-                
+
                 user_id, nickname, card, title, role = self.parser.parse_sender_info_full(sender)
-                
+
                 content, _ = self.parser.parse_message_content(msg_data_item.get("message", []))
                 time_str = self.parser.format_time_short(msg_data_item.get("time", 0))
                 original_time = msg_data_item.get("time", 0)
 
+                ri = reply_infos[i] if i < len(reply_infos) else None
                 storage_messages.append({
                     "user_id": user_id,
                     "nickname": nickname,
@@ -562,7 +569,9 @@ class QuotlyPlugin(Star):
                     "content": content,
                     "ocr_text": "",
                     "time_str": time_str,
-                    "original_time": original_time
+                    "original_time": original_time,
+                    "reply_nickname": ri.get("nickname", "") if ri else "",
+                    "reply_content": ri.get("content", "") if ri else ""
                 })
                 
                 if self.enable_ocr:
@@ -818,6 +827,14 @@ class QuotlyPlugin(Star):
     async def _handle_delete(self, event: AstrMessageEvent):
         self.onebot.set_event(event)
 
+        group_id_str = getattr(event.message_obj, 'group_id', None)
+        current_group_id = None
+        if group_id_str:
+            try:
+                current_group_id = int(group_id_str)
+            except (ValueError, TypeError):
+                pass
+
         reply_id = self.parser.parse_reply(event)
 
         if reply_id is None:
@@ -846,7 +863,7 @@ class QuotlyPlugin(Star):
                     logger.warning(f"无法计算图片hash: {image_url}")
                     continue
 
-                matches = await self.db.find_by_hash(image_hash, threshold=5)
+                matches = await self.db.find_by_hash(image_hash, threshold=5, group_id=current_group_id)
 
                 for match in matches:
                     record_id = match.get('id')
@@ -997,6 +1014,308 @@ class QuotlyPlugin(Star):
         except Exception as e:
             logger.error(f"随机获取失败: {e}")
             yield event.plain_result(f"随机获取失败: {str(e)}")
+
+    def _register_web_apis(self):
+        """注册 Web API 端点（Plugin Pages 后端）"""
+        p = f"/{PLUGIN_NAME}"
+        self.context.register_web_api(f"{p}/records", self._api_records, ["GET"], "List records")
+        self.context.register_web_api(f"{p}/records/detail", self._api_record_detail, ["GET"], "Get record detail")
+        self.context.register_web_api(f"{p}/records/image", self._api_record_image, ["GET"], "Get record image")
+        self.context.register_web_api(f"{p}/records/delete", self._api_record_delete, ["POST"], "Delete record")
+        self.context.register_web_api(f"{p}/records/messages", self._api_update_messages, ["POST"], "Update messages")
+        self.context.register_web_api(f"{p}/search", self._api_search, ["GET"], "Search records")
+        self.context.register_web_api(f"{p}/upload", self._api_upload, ["POST"], "Upload images")
+        self.context.register_web_api(f"{p}/groups", self._api_groups, ["GET"], "List groups")
+        self.context.register_web_api(f"{p}/stats", self._api_stats, ["GET"], "Statistics")
+        self.context.register_web_api(f"{p}/export", self._api_export, ["GET"], "Export ZIP")
+        self.context.register_web_api(f"{p}/import/zip", self._api_import_zip, ["POST"], "Import ZIP")
+
+    async def _api_records(self):
+        try:
+            group_id = request.args.get("group_id", type=int)
+            limit = min(request.args.get("limit", default=20, type=int), 100)
+            offset = request.args.get("offset", default=0, type=int)
+            result = await self.db.get_records(group_id=group_id, limit=limit, offset=offset)
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"API records error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_record_detail(self):
+        try:
+            record_id = request.args.get("id", type=int)
+            if record_id is None:
+                return jsonify({"error": "id required"}), 400
+            record = await self.db.get_record_by_id(record_id)
+            if not record:
+                return jsonify({"error": "Record not found"}), 404
+            return jsonify(record)
+        except Exception as e:
+            logger.error(f"API record detail error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_record_image(self):
+        try:
+            record_id = request.args.get("id", type=int)
+            if record_id is None:
+                return jsonify({"error": "id required"}), 400
+            image_path = await self.db.get_image_path(record_id)
+            if not image_path or not Path(image_path).exists():
+                return jsonify({"error": "Image file not found"}), 404
+            data = await asyncio.to_thread(Path(image_path).read_bytes)
+            return Response(data, mimetype="image/png")
+        except Exception as e:
+            logger.error(f"API record image error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_record_delete(self):
+        try:
+            data = await request.get_json()
+            record_id = data.get("id")
+            if record_id is None:
+                return jsonify({"error": "id required"}), 400
+            success = await self.db.delete_by_id(int(record_id))
+            if success:
+                return jsonify({"success": True})
+            return jsonify({"error": "Record not found"}), 404
+        except Exception as e:
+            logger.error(f"API delete error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_update_messages(self):
+        try:
+            data = await request.get_json()
+            record_id = data.get("record_id")
+            messages = data.get("messages", [])
+            if record_id is None:
+                return jsonify({"error": "record_id required"}), 400
+            success = await self.db.update_messages(int(record_id), messages)
+            if success:
+                return jsonify({"success": True})
+            return jsonify({"error": "Record not found"}), 404
+        except Exception as e:
+            logger.error(f"API update messages error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_search(self):
+        try:
+            keyword = request.args.get("keyword", "")
+            if not keyword:
+                return jsonify({"error": "keyword required"}), 400
+            group_id = request.args.get("group_id", type=int)
+            limit = min(request.args.get("limit", default=20, type=int), 100)
+            offset = request.args.get("offset", default=0, type=int)
+            results = await self.db.search_by_keyword(keyword, group_id=group_id, limit=limit, offset=offset)
+            total = await self.db.search_count(keyword, group_id=group_id)
+            records = []
+            for r in results:
+                record = {k: r[k] for k in ("id", "image_hash", "image_path", "group_id", "created_at") if k in r}
+                record["image_exists"] = Path(record["image_path"]).exists() if record.get("image_path") else False
+                record["messages"] = r.get("messages", [])
+                records.append(record)
+            return jsonify({"results": records, "total": total, "keyword": keyword})
+        except Exception as e:
+            logger.error(f"API search error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_upload(self):
+        try:
+            import base64
+            data = await request.get_json()
+            image_b64 = data.get("image_data")
+            if not image_b64:
+                return jsonify({"error": "image_data required"}), 400
+
+            image_data = base64.b64decode(image_b64)
+            image_hash = compute_phash(image_data)
+            if not image_hash:
+                return jsonify({"error": "Failed to compute image hash"}), 400
+
+            duplicates = await self.db.find_by_hash(image_hash, threshold=5)
+            if duplicates:
+                return jsonify({"success": False, "error": "Duplicate found", "existing_id": duplicates[0]["id"]})
+
+            group_id = data.get("group_id")
+            enable_ocr = data.get("enable_ocr", False)
+
+            placeholder_messages = [{"content": "", "ocr_text": ""}]
+            record_id = await self.db.save_record(image_hash, image_data, group_id=group_id, messages=placeholder_messages)
+
+            if enable_ocr:
+                asyncio.create_task(self._background_upload_ocr(record_id, image_data))
+
+            return jsonify({"success": True, "record_id": record_id})
+        except Exception as e:
+            logger.error(f"API upload error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _background_upload_ocr(self, record_id: int, image_data: bytes):
+        """上传图片的后台 OCR 任务"""
+        try:
+            import base64
+            data_url = f"data:image/png;base64,{base64.b64encode(image_data).decode()}"
+
+            provider_id = None
+            try:
+                pm = self.context.provider_manager
+                if hasattr(pm, 'providers') and pm.providers:
+                    first_key = next(iter(pm.providers)) if isinstance(pm.providers, dict) else None
+                    if first_key is not None:
+                        provider_id = first_key
+            except Exception:
+                pass
+
+            if not provider_id:
+                logger.debug("上传 OCR: 无可用的 LLM provider，跳过")
+                return
+
+            llm_resp = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt="请识别这张图片中的所有文字内容，只输出识别到的文字，不要添加任何解释或说明。如果图片中没有文字，请输出：[无文字]",
+                image_urls=[data_url]
+            )
+
+            if llm_resp and llm_resp.completion_text:
+                ocr_text = llm_resp.completion_text.strip()
+                if ocr_text and ocr_text != "[无文字]":
+                    record = await self.db.get_record_by_id(record_id)
+                    if record and record.get("messages") is not None:
+                        messages = record["messages"]
+                        if messages:
+                            messages[0]["ocr_text"] = ocr_text
+                        else:
+                            messages = [{"content": "", "ocr_text": ocr_text, "seq": 0}]
+                        await self.db.update_ocr_text(record["image_hash"], messages)
+                        logger.debug(f"上传 OCR 完成: record_id={record_id}")
+        except Exception as e:
+            logger.debug(f"上传 OCR 失败: {e}")
+
+    async def _api_groups(self):
+        try:
+            groups = await self.db.get_groups()
+            return jsonify({"groups": groups})
+        except Exception as e:
+            logger.error(f"API groups error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    async def _api_stats(self):
+        try:
+            stats = await self.db.get_stats()
+            return jsonify(stats)
+        except Exception as e:
+            logger.error(f"API stats error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    def _build_export_zip(self, records, stats):
+        """同步构建导出 ZIP（在线程池中执行）"""
+        import json
+        import zipfile
+        import io
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            manifest = {
+                "version": "1.0",
+                "exported_at": int(datetime.now().timestamp()),
+                "stats": stats
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+            export_records = []
+            for r in records:
+                image_path = r.get("image_path")
+                image_file = None
+                if image_path and Path(image_path).exists():
+                    image_file = f"images/{Path(image_path).name}"
+                    zf.write(image_path, image_file)
+
+                export_records.append({
+                    "image_hash": r["image_hash"],
+                    "image_file": image_file,
+                    "group_id": r.get("group_id"),
+                    "created_at": r["created_at"],
+                    "messages": r.get("messages", [])
+                })
+
+            zf.writestr("records.json", json.dumps(export_records, ensure_ascii=False, indent=2))
+
+        buf.seek(0)
+        return buf.getvalue()
+
+    async def _api_export(self):
+        try:
+            records = await self.db.get_all_records_for_export()
+            stats = await self.db.get_stats()
+            zip_data = await asyncio.to_thread(self._build_export_zip, records, stats)
+            return Response(zip_data, mimetype="application/zip", headers={
+                "Content-Disposition": "attachment; filename=quotly_export.zip"
+            })
+        except Exception as e:
+            logger.error(f"API export error: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    def _read_import_zip(self, zip_data):
+        """同步解析导入 ZIP（在线程池中执行），返回记录列表或错误信息"""
+        import json
+        import zipfile
+        import io
+
+        with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zf:
+            names = zf.namelist()
+            if "records.json" not in names:
+                return None, "无效的备份文件: 缺少 records.json"
+
+            records_json = json.loads(zf.read("records.json"))
+            for rec in records_json:
+                image_file = rec.get("image_file")
+                rec["_image_data"] = zf.read(image_file) if (image_file and image_file in names) else None
+
+            return records_json, None
+
+    async def _api_import_zip(self):
+        try:
+            files = await request.files
+            file = files.get("file")
+            if not file:
+                return jsonify({"error": "file required"}), 400
+
+            zip_data = file.read()
+            records_json, error = await asyncio.to_thread(self._read_import_zip, zip_data)
+            if error:
+                return jsonify({"error": error}), 400
+
+            imported = 0
+            skipped = 0
+            errors = 0
+
+            for rec in records_json:
+                try:
+                    image_hash = rec.get("image_hash", "")
+                    image_data = rec.get("_image_data")
+
+                    if not image_data:
+                        errors += 1
+                        continue
+
+                    if image_hash:
+                        dupes = await self.db.find_by_hash(image_hash, threshold=5)
+                        if dupes:
+                            skipped += 1
+                            continue
+
+                    new_hash = compute_phash(image_data) or image_hash
+                    group_id = rec.get("group_id")
+                    messages = rec.get("messages", [])
+                    await self.db.save_record(new_hash, image_data, group_id=group_id, messages=messages)
+                    imported += 1
+                except Exception as e:
+                    logger.debug(f"导入记录失败: {e}")
+                    errors += 1
+
+            return jsonify({"success": True, "imported": imported, "skipped": skipped, "errors": errors})
+        except Exception as e:
+            logger.error(f"API import zip error: {e}")
+            return jsonify({"error": str(e)}), 500
 
     async def terminate(self):
         """插件卸载时调用"""
