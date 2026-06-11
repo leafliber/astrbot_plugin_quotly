@@ -1,7 +1,5 @@
 const bridge = window.AstrBotPluginPage;
 
-let apiBase = "";
-
 const state = {
   records: [],
   total: 0,
@@ -18,7 +16,6 @@ const state = {
 // --- Init ---
 async function init() {
   const ctx = await bridge.ready();
-  apiBase = ctx?.pluginName ? `/api/plug/${ctx.pluginName}` : "";
   await loadStats();
   await loadGroups();
   await loadRecords();
@@ -26,10 +23,6 @@ async function init() {
 }
 
 // --- API helpers ---
-function imageUrl(id) {
-  return apiBase ? `${apiBase}/records/image?id=${id}` : "";
-}
-
 async function loadStats() {
   try {
     const s = await bridge.apiGet("stats");
@@ -103,11 +96,9 @@ function renderRecords(records, highlight) {
 
     const img = document.createElement("img");
     img.className = "record-thumb";
-    img.loading = "lazy";
     img.alt = "语录图片";
-    if (r.image_exists) {
-      img.src = imageUrl(r.id);
-      img.onerror = () => { img.src = ""; img.alt = "图片加载失败"; };
+    if (r.thumbnail) {
+      img.src = r.thumbnail;
     } else {
       img.alt = "图片不存在";
       img.style.background = "#e8e8ea";
@@ -187,8 +178,8 @@ async function showDetail(id) {
     state.dirty = false;
 
     const img = document.getElementById("detail-image");
-    if (record.image_exists) {
-      img.src = imageUrl(record.id);
+    if (record.image_data) {
+      img.src = record.image_data;
       img.hidden = false;
       document.getElementById("detail-image-wrap").hidden = false;
     } else {

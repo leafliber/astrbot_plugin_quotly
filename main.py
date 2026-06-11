@@ -4,6 +4,7 @@ AstrBot Quotly Plugin
 """
 
 import asyncio
+import base64
 import os
 import random
 import re
@@ -1020,7 +1021,6 @@ class QuotlyPlugin(Star):
         p = f"/{self.plugin_name}"
         self.context.register_web_api(f"{p}/records", self._api_records, ["GET"], "List records")
         self.context.register_web_api(f"{p}/records/detail", self._api_record_detail, ["GET"], "Get record detail")
-        self.context.register_web_api(f"{p}/records/image", self._api_record_image, ["GET"], "Get record image")
         self.context.register_web_api(f"{p}/records/delete", self._api_record_delete, ["POST"], "Delete record")
         self.context.register_web_api(f"{p}/records/messages", self._api_update_messages, ["POST"], "Update messages")
         self.context.register_web_api(f"{p}/search", self._api_search, ["GET"], "Search records")
@@ -1030,12 +1030,32 @@ class QuotlyPlugin(Star):
         self.context.register_web_api(f"{p}/export", self._api_export, ["GET"], "Export ZIP")
         self.context.register_web_api(f"{p}/import/zip", self._api_import_zip, ["POST"], "Import ZIP")
 
+    @staticmethod
+    def _make_thumbnail(data: bytes, max_width: int) -> bytes:
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        if img.width > max_width:
+            ratio = max_width / img.width
+            img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+
+    async def _encode_image(self, image_path: str, max_width: int | None = None) -> str:
+        data = await asyncio.to_thread(Path(image_path).read_bytes)
+        if max_width:
+            data = await asyncio.to_thread(self._make_thumbnail, data, max_width)
+        b64 = await asyncio.to_thread(lambda: base64.b64encode(data).decode())
+        return f"data:image/png;base64,{b64}"
+
     async def _api_records(self):
         try:
             group_id = request.args.get("group_id", type=int)
             limit = min(request.args.get("limit", default=20, type=int), 100)
             offset = request.args.get("offset", default=0, type=int)
             result = await self.db.get_records(group_id=group_id, limit=limit, offset=offset)
+            await self._attach_thumbnails(result["records"], max_width=200)
             return jsonify(result)
         except Exception as e:
             logger.error(f"API records error: {e}")
@@ -1049,24 +1069,25 @@ class QuotlyPlugin(Star):
             record = await self.db.get_record_by_id(record_id)
             if not record:
                 return jsonify({"error": "Record not found"}), 404
+            if record.get("image_exists"):
+                record["image_data"] = await self._encode_image(record["image_path"])
+            record.pop("image_path", None)
+            record.pop("image_hash", None)
             return jsonify(record)
         except Exception as e:
             logger.error(f"API record detail error: {e}")
             return jsonify({"error": str(e)}), 500
 
-    async def _api_record_image(self):
-        try:
-            record_id = request.args.get("id", type=int)
-            if record_id is None:
-                return jsonify({"error": "id required"}), 400
-            image_path = await self.db.get_image_path(record_id)
-            if not image_path or not Path(image_path).exists():
-                return jsonify({"error": "Image file not found"}), 404
-            data = await asyncio.to_thread(Path(image_path).read_bytes)
-            return Response(data, mimetype="image/png")
-        except Exception as e:
-            logger.error(f"API record image error: {e}")
-            return jsonify({"error": str(e)}), 500
+    async def _attach_thumbnails(self, records: list, max_width: int):
+        async def _attach(r):
+            if r.get("image_exists") and r.get("image_path"):
+                try:
+                    r["thumbnail"] = await self._encode_image(r["image_path"], max_width=max_width)
+                except Exception as e:
+                    logger.warning(f"缩略图生成失败 id={r['id']}: {e}")
+            r.pop("image_path", None)
+            r.pop("image_hash", None)
+        await asyncio.gather(*(_attach(r) for r in records))
 
     async def _api_record_delete(self):
         try:
@@ -1113,6 +1134,7 @@ class QuotlyPlugin(Star):
                 record["image_exists"] = Path(record["image_path"]).exists() if record.get("image_path") else False
                 record["messages"] = r.get("messages", [])
                 records.append(record)
+            await self._attach_thumbnails(records, max_width=200)
             return jsonify({"results": records, "total": total, "keyword": keyword})
         except Exception as e:
             logger.error(f"API search error: {e}")
