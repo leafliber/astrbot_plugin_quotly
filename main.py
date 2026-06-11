@@ -1177,19 +1177,16 @@ class QuotlyPlugin(Star):
             import base64
             data_url = f"data:image/png;base64,{base64.b64encode(image_data).decode()}"
 
-            provider_id = None
-            try:
-                pm = self.context.provider_manager
-                if hasattr(pm, 'inst_map') and pm.inst_map:
-                    first_key = next(iter(pm.inst_map))
-                    if first_key is not None:
-                        provider_id = first_key
-            except Exception:
-                pass
-
-            if not provider_id:
-                logger.debug("上传 OCR: 无可用的 LLM provider，跳过")
+            # 优先使用 AstrBot 配置的图片转述模型，降级到默认聊天模型
+            cfg = self.context.get_config()
+            img_cap_prov_id = cfg.get("provider_settings", {}).get("default_image_caption_provider_id", "")
+            prov = self.context.get_provider_by_id(img_cap_prov_id) if img_cap_prov_id else None
+            if not prov:
+                prov = self.context.get_using_provider()
+            if not prov:
+                logger.warning("上传 OCR: 无可用的视觉模型或聊天模型，跳过")
                 return
+            provider_id = prov.meta().id
 
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
