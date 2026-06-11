@@ -154,13 +154,18 @@ function renderRecords(records, highlight) {
     const card = document.createElement("div");
     card.className = "record-card";
 
-    const img = document.createElement("img");
+    const img = document.createElement(r.thumbnail ? "img" : "div");
     img.className = "record-thumb";
-    img.alt = "语录图片";
     if (r.thumbnail) {
       img.src = r.thumbnail;
+      img.alt = "语录图片";
     } else {
-      img.alt = "图片不存在";
+      img.textContent = "无图片";
+      img.style.display = "flex";
+      img.style.alignItems = "center";
+      img.style.justifyContent = "center";
+      img.style.color = "var(--text-2)";
+      img.style.fontSize = "13px";
     }
 
     const info = document.createElement("div");
