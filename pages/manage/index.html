@@ -7,64 +7,61 @@
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <header id="header">
-    <h1 id="page-title">Quotly 语录管理</h1>
-    <div id="stats-bar">
-      <span id="stat-records">0 条记录</span>
-      <span id="stat-messages">0 条消息</span>
-      <span id="stat-groups">0 个群组</span>
+  <nav class="navbar">
+    <div class="nav-inner">
+      <span class="nav-brand">Quotly 语录管理</span>
+      <div class="nav-stats" id="nav-stats">
+        <span class="stat-chip" id="stat-records"><span class="skel-inline"></span></span>
+        <span class="stat-chip" id="stat-messages"><span class="skel-inline"></span></span>
+        <span class="stat-chip" id="stat-groups"><span class="skel-inline"></span></span>
+      </div>
     </div>
-  </header>
-
-  <nav id="toolbar">
-    <select id="group-filter">
-      <option value="">全部群组</option>
-    </select>
-    <div id="search-box">
-      <input type="text" id="search-input" placeholder="搜索语录..." />
-      <button id="search-btn">搜索</button>
-      <button id="clear-search-btn" hidden>清除</button>
-    </div>
-    <button id="upload-btn">上传图片</button>
-    <button id="export-btn" class="secondary">导出</button>
-    <button id="import-btn" class="secondary">导入</button>
   </nav>
 
-  <main>
-    <div id="loading" hidden>加载中...</div>
+  <main class="main-content">
+    <div id="view-records" class="view active">
+      <div class="toolbar">
+        <select id="group-filter">
+          <option value="">全部群组</option>
+        </select>
+        <div class="search-box">
+          <input type="text" id="search-input" placeholder="搜索语录..." />
+          <button id="search-btn">搜索</button>
+          <button id="clear-search-btn" class="btn-ghost" hidden>清除</button>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <button id="upload-btn">上传图片</button>
+        <button id="export-btn" class="btn-ghost">导出</button>
+        <button id="import-btn" class="btn-ghost">导入</button>
+      </div>
 
-    <section id="records-list"></section>
+      <div class="records-grid" id="records-list"></div>
 
-    <div id="pagination" hidden>
-      <button id="prev-btn">上一页</button>
-      <span id="page-info">1 / 1</span>
-      <button id="next-btn">下一页</button>
+      <div class="pagination" id="pagination" hidden>
+        <button id="prev-btn" class="btn-ghost">上一页</button>
+        <span id="page-info">1 / 1</span>
+        <button id="next-btn" class="btn-ghost">下一页</button>
+      </div>
+
+      <div class="empty-state" id="empty-state" hidden>
+        <p>暂无语录记录</p>
+      </div>
     </div>
 
-    <section id="record-detail" hidden>
-      <button id="back-btn">← 返回列表</button>
-      <div id="detail-content">
-        <div id="detail-image-wrap">
-          <img id="detail-image" alt="语录图片" />
-        </div>
-        <div id="detail-info">
-          <p id="detail-meta"></p>
-          <div id="messages-editor"></div>
-          <button id="save-messages-btn" hidden>保存修改</button>
-        </div>
+    <div id="view-detail" class="view">
+      <div class="detail-header">
+        <button id="back-btn" class="btn-ghost">← 返回列表</button>
+        <button id="save-messages-btn" hidden>保存修改</button>
       </div>
-    </section>
-
-    <div id="empty-state" hidden>
-      <p>暂无语录记录</p>
+      <div class="detail-body" id="detail-body"></div>
     </div>
   </main>
 
-  <div id="lightbox" hidden>
+  <div id="lightbox" class="lightbox" hidden>
     <img id="lightbox-img" alt="全尺寸图片" />
   </div>
 
-  <div id="upload-modal" hidden>
+  <div id="upload-modal" class="modal-overlay" hidden>
     <div class="modal-content">
       <h2>上传语录图片</h2>
       <div class="form-group">
@@ -80,26 +77,26 @@
       <div class="form-group">
         <label><input type="checkbox" id="upload-ocr" /> 启用 OCR 识别</label>
       </div>
-      <div id="upload-progress" hidden></div>
+      <div id="upload-progress" class="progress-text" hidden></div>
       <div class="modal-actions">
-        <button id="upload-cancel">取消</button>
+        <button id="upload-cancel" class="btn-ghost">取消</button>
         <button id="upload-submit">上传</button>
       </div>
     </div>
   </div>
 
-  <div id="delete-modal" hidden>
+  <div id="delete-modal" class="modal-overlay" hidden>
     <div class="modal-content">
       <h2>确认删除</h2>
       <p id="delete-msg">确定要删除这条语录吗？此操作不可撤销。</p>
       <div class="modal-actions">
-        <button id="delete-cancel">取消</button>
-        <button id="delete-confirm" class="danger">删除</button>
+        <button id="delete-cancel" class="btn-ghost">取消</button>
+        <button id="delete-confirm" class="btn-danger">删除</button>
       </div>
     </div>
   </div>
 
-  <div id="import-modal" hidden>
+  <div id="import-modal" class="modal-overlay" hidden>
     <div class="modal-content modal-wide">
       <h2>导入</h2>
       <div class="tab-bar">
@@ -113,9 +110,9 @@
           <label>选择备份文件</label>
           <input type="file" id="import-zip-file" accept=".zip" />
         </div>
-        <div id="import-zip-progress" hidden></div>
+        <div id="import-zip-progress" class="progress-text" hidden></div>
         <div class="modal-actions">
-          <button id="import-zip-cancel">取消</button>
+          <button id="import-zip-cancel" class="btn-ghost">取消</button>
           <button id="import-zip-submit">导入备份</button>
         </div>
       </div>
@@ -135,9 +132,9 @@
         <div class="form-group">
           <label><input type="checkbox" id="import-images-ocr" /> 启用 OCR 识别</label>
         </div>
-        <div id="import-images-progress" hidden></div>
+        <div id="import-images-progress" class="progress-text" hidden></div>
         <div class="modal-actions">
-          <button id="import-images-cancel">取消</button>
+          <button id="import-images-cancel" class="btn-ghost">取消</button>
           <button id="import-images-submit">开始导入</button>
         </div>
       </div>
