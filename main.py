@@ -45,8 +45,8 @@ class QuotlyPlugin(Star):
 
         self.renderer = QuotlyRenderer()
 
-        plugin_name = getattr(self, 'name', 'quotly')
-        self.db = QuotlyDatabase(plugin_name=plugin_name)
+        self.plugin_name = getattr(self, 'name', 'quotly')
+        self.db = QuotlyDatabase(plugin_name=self.plugin_name)
 
         self.message_provider = MessageProvider(context, self.onebot, self.parser)
 
@@ -1017,7 +1017,7 @@ class QuotlyPlugin(Star):
 
     def _register_web_apis(self):
         """注册 Web API 端点（Plugin Pages 后端）"""
-        p = f"/{PLUGIN_NAME}"
+        p = f"/{self.plugin_name}"
         self.context.register_web_api(f"{p}/records", self._api_records, ["GET"], "List records")
         self.context.register_web_api(f"{p}/records/detail", self._api_record_detail, ["GET"], "Get record detail")
         self.context.register_web_api(f"{p}/records/image", self._api_record_image, ["GET"], "Get record image")

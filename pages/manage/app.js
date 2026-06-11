@@ -1,5 +1,7 @@
 const bridge = window.AstrBotPluginPage;
 
+let apiBase = "";
+
 const state = {
   records: [],
   total: 0,
@@ -15,7 +17,8 @@ const state = {
 
 // --- Init ---
 async function init() {
-  await bridge.ready();
+  const ctx = await bridge.ready();
+  apiBase = ctx?.pluginName ? `/api/plug/${ctx.pluginName}` : "";
   await loadStats();
   await loadGroups();
   await loadRecords();
@@ -24,7 +27,7 @@ async function init() {
 
 // --- API helpers ---
 function imageUrl(id) {
-  return `records/image?id=${id}`;
+  return apiBase ? `${apiBase}/records/image?id=${id}` : "";
 }
 
 async function loadStats() {
