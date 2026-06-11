@@ -1180,8 +1180,8 @@ class QuotlyPlugin(Star):
             provider_id = None
             try:
                 pm = self.context.provider_manager
-                if hasattr(pm, 'providers') and pm.providers:
-                    first_key = next(iter(pm.providers)) if isinstance(pm.providers, dict) else None
+                if hasattr(pm, 'inst_map') and pm.inst_map:
+                    first_key = next(iter(pm.inst_map))
                     if first_key is not None:
                         provider_id = first_key
             except Exception:
@@ -1210,7 +1210,7 @@ class QuotlyPlugin(Star):
                         await self.db.update_ocr_text(record["image_hash"], messages)
                         logger.debug(f"上传 OCR 完成: record_id={record_id}")
         except Exception as e:
-            logger.debug(f"上传 OCR 失败: {e}")
+            logger.warning(f"上传 OCR 失败: {e}")
 
     async def _api_groups(self):
         try:
