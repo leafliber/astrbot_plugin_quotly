@@ -31,6 +31,7 @@
         </div>
         <div class="toolbar-spacer"></div>
         <button id="upload-btn">上传图片</button>
+        <button id="delete-all-btn" class="btn-danger">全部删除</button>
         <button id="export-btn" class="btn-ghost">导出</button>
         <button id="import-btn" class="btn-ghost">导入</button>
       </div>
@@ -92,6 +93,18 @@
       <div class="modal-actions">
         <button id="delete-cancel" class="btn-ghost">取消</button>
         <button id="delete-confirm" class="btn-danger">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-all-modal" class="modal-overlay" hidden>
+    <div class="modal-content">
+      <h2>确认全部删除</h2>
+      <p>确定要删除<strong>所有</strong>语录记录吗？此操作不可撤销。</p>
+      <p id="delete-all-count" class="progress-text"></p>
+      <div class="modal-actions">
+        <button id="delete-all-cancel" class="btn-ghost">取消</button>
+        <button id="delete-all-confirm" class="btn-danger">全部删除</button>
       </div>
     </div>
   </div>

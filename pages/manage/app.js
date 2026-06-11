@@ -347,6 +347,35 @@ async function doDelete() {
   document.getElementById("delete-modal").hidden = true;
 }
 
+// ---------- Delete All ----------
+
+function confirmDeleteAll() {
+  document.getElementById("delete-all-count").textContent = "当前共 " + state.total + " 条记录";
+  document.getElementById("delete-all-modal").hidden = false;
+}
+
+async function doDeleteAll() {
+  const btn = document.getElementById("delete-all-confirm");
+  btn.disabled = true;
+  btn.textContent = "删除中...";
+  try {
+    const body = {};
+    if (state.groupId) body.group_id = state.groupId;
+    const result = extractData(await bridge.apiPost("records/delete_all", body));
+    if (result.success) {
+      toast("已删除 " + result.deleted + " 条记录");
+      state.offset = 0;
+      loadRecords();
+      loadStats();
+    }
+  } catch (e) {
+    toast("删除失败: " + e.message);
+  }
+  document.getElementById("delete-all-modal").hidden = true;
+  btn.disabled = false;
+  btn.textContent = "全部删除";
+}
+
 // ---------- Upload ----------
 
 async function doUpload() {
@@ -361,7 +390,8 @@ async function doUpload() {
 
   let success = 0, failed = 0;
   for (let i = 0; i < files.length; i++) {
-    progressEl.textContent = "上传中 " + (i + 1) + "/" + files.length + "...";
+    const ocrLabel = enableOcr ? " (含OCR)" : "";
+    progressEl.textContent = "上传中 " + (i + 1) + "/" + files.length + ocrLabel + "...";
     try {
       const b64 = await fileToBase64(files[i]);
       const body = { image_data: b64 };
@@ -449,7 +479,8 @@ async function doImportImages() {
 
   let success = 0, failed = 0;
   for (let i = 0; i < files.length; i++) {
-    progressEl.textContent = "导入中 " + (i + 1) + "/" + files.length + "...";
+    const ocrLabel = enableOcr ? " (含OCR)" : "";
+    progressEl.textContent = "导入中 " + (i + 1) + "/" + files.length + ocrLabel + "...";
     try {
       const b64 = await fileToBase64(files[i]);
       const body = { image_data: b64 };
@@ -548,6 +579,13 @@ function bindEvents() {
     document.getElementById("delete-modal").hidden = true;
   };
   document.getElementById("delete-confirm").onclick = doDelete;
+
+  // Delete all
+  document.getElementById("delete-all-btn").onclick = confirmDeleteAll;
+  document.getElementById("delete-all-cancel").onclick = () => {
+    document.getElementById("delete-all-modal").hidden = true;
+  };
+  document.getElementById("delete-all-confirm").onclick = doDeleteAll;
 
   // Export
   document.getElementById("export-btn").onclick = async () => {

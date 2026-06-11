@@ -1022,6 +1022,7 @@ class QuotlyPlugin(Star):
         self.context.register_web_api(f"{p}/records", self._api_records, ["GET"], "List records")
         self.context.register_web_api(f"{p}/records/detail", self._api_record_detail, ["GET"], "Get record detail")
         self.context.register_web_api(f"{p}/records/delete", self._api_record_delete, ["POST"], "Delete record")
+        self.context.register_web_api(f"{p}/records/delete_all", self._api_delete_all, ["POST"], "Delete all records")
         self.context.register_web_api(f"{p}/records/messages", self._api_update_messages, ["POST"], "Update messages")
         self.context.register_web_api(f"{p}/search", self._api_search, ["GET"], "Search records")
         self.context.register_web_api(f"{p}/upload", self._api_upload, ["POST"], "Upload images")
@@ -1103,6 +1104,16 @@ class QuotlyPlugin(Star):
             logger.error(f"API delete error: {e}")
             return jsonify({"error": str(e)}), 500
 
+    async def _api_delete_all(self):
+        try:
+            data = await request.get_json() if request.is_json else {}
+            group_id = data.get("group_id")
+            count = await self.db.delete_all(group_id=group_id)
+            return jsonify({"success": True, "deleted": count})
+        except Exception as e:
+            logger.error(f"API delete all error: {e}")
+            return jsonify({"error": str(e)}), 500
+
     async def _api_update_messages(self):
         try:
             data = await request.get_json()
@@ -1140,6 +1151,9 @@ class QuotlyPlugin(Star):
             logger.error(f"API search error: {e}")
             return jsonify({"error": str(e)}), 500
 
+    _last_ocr_time: float = 0.0
+    _ocr_min_interval: float = 3.0  # OCR 调用最小间隔（秒）
+
     async def _api_upload(self):
         try:
             import base64
@@ -1164,12 +1178,23 @@ class QuotlyPlugin(Star):
             record_id = await self.db.save_record(image_hash, image_data, group_id=group_id, messages=placeholder_messages)
 
             if enable_ocr:
-                asyncio.create_task(self._background_upload_ocr(record_id, image_data))
+                await self._do_upload_ocr(record_id, image_data)
 
             return jsonify({"success": True, "record_id": record_id})
         except Exception as e:
             logger.error(f"API upload error: {e}")
             return jsonify({"error": str(e)}), 500
+
+    async def _do_upload_ocr(self, record_id: int, image_data: bytes):
+        """同步执行上传 OCR，带速率控制"""
+        import time
+        now = time.monotonic()
+        elapsed = now - self.__class__._last_ocr_time
+        if elapsed < self._ocr_min_interval:
+            await asyncio.sleep(self._ocr_min_interval - elapsed)
+        self.__class__._last_ocr_time = time.monotonic()
+
+        await self._background_upload_ocr(record_id, image_data)
 
     async def _background_upload_ocr(self, record_id: int, image_data: bytes):
         """上传图片的后台 OCR 任务"""

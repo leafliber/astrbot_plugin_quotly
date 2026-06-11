@@ -359,6 +359,38 @@ class QuotlyDatabase:
         results.sort(key=lambda x: x.get('hamming_distance', 999))
         return results
 
+    async def delete_all(self, group_id: Optional[int] = None) -> int:
+        """删除全部记录（可按群号筛选），返回删除数量"""
+        conn = await self._get_conn()
+
+        if group_id is not None:
+            cursor = await conn.execute("SELECT id, image_path FROM quotly_records WHERE group_id = ?", (group_id,))
+        else:
+            cursor = await conn.execute("SELECT id, image_path FROM quotly_records")
+        rows = await cursor.fetchall()
+
+        if not rows:
+            return 0
+
+        ids = [row['id'] for row in rows]
+        placeholders = ",".join("?" for _ in ids)
+
+        async with self._lock:
+            await conn.execute(f"DELETE FROM quotly_messages WHERE record_id IN ({placeholders})", ids)
+            await conn.execute(f"DELETE FROM quotly_records WHERE id IN ({placeholders})", ids)
+            await conn.commit()
+
+        for row in rows:
+            image_path = row['image_path']
+            if image_path:
+                try:
+                    Path(image_path).unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"删除图片文件失败: {e}")
+
+        logger.info(f"已批量删除 {len(rows)} 条语录记录" + (f" (group_id={group_id})" if group_id else ""))
+        return len(rows)
+
     async def delete_by_id(self, record_id: int) -> bool:
         """根据记录ID删除语录记录"""
         conn = await self._get_conn()
