@@ -69,6 +69,10 @@ class QuotlyPlugin(Star):
         except Exception as e:
             logger.warning(f"字体初始化失败: {e}")
 
+    async def _download_image_via_onebot(self, url: str):
+        """通过 OneBot download_file API 下载图片，作为 HTTP 直接下载的备用方案"""
+        return await self.onebot.download_file(url)
+
     def _load_config(self):
         trigger_words = self.config.get("trigger_words", {})
         self.q_trigger = trigger_words.get("q_trigger", "").strip()
@@ -516,10 +520,11 @@ class QuotlyPlugin(Star):
                 reply_infos.append(reply_info)
 
             png_data = await self.renderer.arender(
-                render_messages, 
-                show_title=show_title, 
+                render_messages,
+                show_title=show_title,
                 show_time=show_time,
-                show_date=show_date
+                show_date=show_date,
+                image_download_fallback=self._download_image_via_onebot
             )
 
             image_hash = compute_phash(png_data) or "unknown"
@@ -702,16 +707,18 @@ class QuotlyPlugin(Star):
 
             selected_results = random.sample(results, min(max_count, len(results)))
 
-            for result in selected_results:
+            last_idx = len(selected_results) - 1
+            for i, result in enumerate(selected_results):
                 image_path = result.get('image_path')
                 if image_path and Path(image_path).exists():
                     await asyncio.sleep(random.uniform(0, 2))
-                    yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
+                    chain = [Comp.Image.fromFileSystem(image_path)]
+                    # 附加统计提示到最后一张图片
+                    if i == last_idx and len(results) > max_count:
+                        chain.append(Comp.Plain(f"\n共找到 {len(results)} 条记录，随机显示 {max_count} 条"))
+                    yield event.chain_result(chain)
                 else:
                     yield event.plain_result(f"图片文件不存在: {image_path}")
-
-            if len(results) > max_count:
-                yield event.plain_result(f"共找到 {len(results)} 条记录，随机显示 {max_count} 条")
 
         except Exception as e:
             logger.error(f"搜索失败: {e}")

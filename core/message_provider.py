@@ -200,7 +200,7 @@ class MessageProvider:
             raw_message=mr_message.get_raw_message_dict()
         )
 
-    def _convert_mr_chain_to_onebot(self, chain: list) -> list:
+    def _convert_mr_chain_to_onebot(self, chain: list, mr_message=None) -> list:
         """
         将 message_recorder 消息链格式转换为 OneBot11 格式
 
@@ -209,6 +209,7 @@ class MessageProvider:
 
         Args:
             chain: message_recorder 消息链
+            mr_message: 可选，MessageRecord 实例，用于 extract_media_paths() 获取本地媒体文件
 
         Returns:
             OneBot11 格式消息链
@@ -229,7 +230,17 @@ class MessageProvider:
             "File": "file",
         }
 
+        # 预提取消息记录中的所有媒体文件路径（extract_media_paths 比逐段查找更可靠）
+        extra_media_paths = []
+        if self._mr_api and mr_message:
+            try:
+                extra_media_paths = self._mr_api.extract_media_paths(mr_message) or []
+            except Exception:
+                pass
+
         result = []
+        img_segment_idx = 0  # 追踪图片段索引，用于匹配 extract_media_paths 的结果
+
         for segment in chain:
             if not isinstance(segment, dict):
                 continue
@@ -256,6 +267,9 @@ class MessageProvider:
                     if media_url:
                         # media_url 可能是 web 路径，尝试提取相对路径
                         candidates.append(media_url.lstrip('/'))
+                    # extract_media_paths() 提取的路径作为额外候选
+                    if img_segment_idx < len(extra_media_paths):
+                        candidates.append(extra_media_paths[img_segment_idx])
 
                     for candidate in candidates:
                         abs_path = self._mr_api.get_media_absolute_path(candidate)
@@ -268,6 +282,7 @@ class MessageProvider:
                 if not resolved:
                     ob_segment["data"]["url"] = original_url
                 ob_segment["data"]["file"] = segment.get("file", "")
+                img_segment_idx += 1
             elif mr_type == "Face":
                 ob_segment["data"]["id"] = segment.get("id", "")
                 ob_segment["data"]["name"] = segment.get("name", "")
@@ -341,7 +356,7 @@ class MessageProvider:
                     render_msg = await self.convert_mr_to_render(mr_msg, group_id)
                     raw = mr_msg.get_raw_message_dict() or {}
                     mr_chain = mr_msg.get_message_chain_list() or []
-                    ob_chain = self._convert_mr_chain_to_onebot(mr_chain)
+                    ob_chain = self._convert_mr_chain_to_onebot(mr_chain, mr_msg)
 
                     return {
                         "message_id": mr_msg.message_id,
@@ -422,7 +437,7 @@ class MessageProvider:
                         render_msg = await self.convert_mr_to_render(mr_msg, group_id)
                         raw = mr_msg.get_raw_message_dict() or {}
                         mr_chain = mr_msg.get_message_chain_list() or []
-                        ob_chain = self._convert_mr_chain_to_onebot(mr_chain)
+                        ob_chain = self._convert_mr_chain_to_onebot(mr_chain, mr_msg)
 
                         messages.append({
                             "message_id": mr_msg.message_id,

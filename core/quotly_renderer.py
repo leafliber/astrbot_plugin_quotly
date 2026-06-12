@@ -29,6 +29,7 @@ FONT_DOWNLOAD_URLS = {
     "HarmonyOS_Sans_SC_Regular.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Regular.ttf",
     "HarmonyOS_Sans_SC_Medium.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Medium.ttf",
     "HarmonyOS_Sans_SC_Bold.ttf": "https://cdn.jsdelivr.net/gh/IKKI2000/harmonyos-fonts@latest/fonts/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Bold.ttf",
+    "NotoColorEmoji.ttf": "https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji/fonts/NotoColorEmoji.ttf",
 }
 
 FONT_WEIGHT_MAP = {
@@ -126,10 +127,12 @@ class QuotlyRenderer:
                         "详见 README「字体显示为方块 / 乱码」章节。"
                     )
 
-            all_exist = all((self._fonts_dir / f).exists() for f in FONT_DOWNLOAD_URLS)
-            if all_exist:
+            # 正文字体全部就绪即可，emoji 字体可选
+            body_fonts_ready = all((self._fonts_dir / f).exists() for f in FONT_WEIGHT_MAP)
+            if body_fonts_ready:
                 QuotlyRenderer._fonts_ready = True
-                logger.info("字体加载完成")
+                emoji_ok = (self._fonts_dir / "NotoColorEmoji.ttf").exists()
+                logger.info(f"字体加载完成（emoji 字体: {'已就绪' if emoji_ok else '未安装，emoji 可能无法显示'}）")
             else:
                 logger.warning("部分字体文件缺失，将使用系统字体回退")
 
@@ -162,6 +165,13 @@ class QuotlyRenderer:
                     f"font-weight: {weight}; font-style: normal; }}"
                 )
 
+        emoji_path = self._fonts_dir / "NotoColorEmoji.ttf"
+        if emoji_path.exists():
+            font_faces.append(
+                f"@font-face {{ font-family: 'Noto Color Emoji'; "
+                f"src: url('{emoji_path}') format('truetype'); }}"
+            )
+
         return "\n".join(font_faces) if font_faces else ""
 
     async def cleanup(self):
@@ -169,10 +179,12 @@ class QuotlyRenderer:
         logger.debug(f"QuotlyRenderer 实例清理，当前实例数: {QuotlyRenderer._instance_count}")
 
     async def arender(self, messages: List[dict], show_title: bool = True, show_time: bool = True,
-                      show_date: bool = True) -> bytes:
+                      show_date: bool = True, image_download_fallback=None) -> bytes:
         start_time = time.time()
 
         await self.ensure_fonts()
+
+        self._image_download_fallback = image_download_fallback
 
         image_urls = set()
         for msg in messages:
@@ -283,6 +295,8 @@ class QuotlyRenderer:
         if cached is not None:
             return
 
+        # 方案 1: HTTP 直接下载
+        downloaded = False
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
@@ -294,9 +308,36 @@ class QuotlyRenderer:
                             disk_path.write_bytes(data)
                         except Exception as e:
                             logger.debug(f"写入磁盘缓存失败: {e}")
-                        logger.debug(f"预加载图片: {url[:50]}...")
+                        logger.debug(f"预加载图片(HTTP): {url[:50]}...")
+                        downloaded = True
         except Exception as e:
-            logger.warning(f"预加载图片失败: {url[:80]}..., 错误: {e}")
+            logger.debug(f"HTTP 下载失败: {url[:80]}..., 错误: {e}")
+
+        # 方案 2: 使用备用下载回调（如 OneBot download_file API）
+        if not downloaded:
+            fallback = getattr(self, '_image_download_fallback', None)
+            if fallback:
+                try:
+                    local_path = await fallback(url)
+                    if local_path and Path(local_path).is_file():
+                        data = Path(local_path).read_bytes()
+                        await QuotlyRenderer._avatar_cache.set(cache_key, data)
+                        try:
+                            disk_path.write_bytes(data)
+                        except Exception as e:
+                            logger.debug(f"写入磁盘缓存失败: {e}")
+                        logger.debug(f"预加载图片(备用): {url[:50]}...")
+                        downloaded = True
+                        # 已缓存到本地，清理 OneBot 下载的原始文件
+                        try:
+                            Path(local_path).unlink()
+                        except OSError:
+                            pass
+                except Exception as e:
+                    logger.debug(f"备用下载失败: {url[:80]}..., 错误: {e}")
+
+        if not downloaded:
+            logger.warning(f"图片预加载全部失败: {url[:80]}...")
 
     def _get_avatar_src(self, url: str) -> str:
         if not url:
@@ -395,9 +436,9 @@ class QuotlyRenderer:
 
             if is_image_only and not reply_html:
                 bubble_class = "bubble image-only"
-                image_data_url = self._get_image_data_url(image_url)
-                if image_data_url:
-                    content_html = f'<img class="msg-image-full" src="{image_data_url}">'
+                image_src = self._get_local_image_path(image_url)
+                if image_src:
+                    content_html = f'<img class="msg-image-full" src="{image_src}">'
                 else:
                     content_html = '<div class="image-fallback">[图片]</div>'
             else:
@@ -439,28 +480,6 @@ class QuotlyRenderer:
         if disk_path.exists():
             return str(disk_path)
 
-        return ""
-
-    def _get_image_data_url(self, url: str) -> str:
-        """将图片转为 data URL，用于 html2pic 内嵌（html2pic 不支持本地文件路径）"""
-        if not url:
-            return ""
-
-        if url.startswith('data:'):
-            return url
-
-        local_path = self._get_local_image_path(url)
-        if not local_path:
-            return ""
-
-        try:
-            data = Path(local_path).read_bytes()
-            mime = self._detect_image_mime(data)
-            import base64
-            b64 = base64.b64encode(data).decode('ascii')
-            return f"data:{mime};base64,{b64}"
-        except Exception as e:
-            logger.debug(f"转换图片为 data URL 失败: {e}")
         return ""
 
     @staticmethod
@@ -640,7 +659,7 @@ class QuotlyRenderer:
         * {{
             margin: 0;
             padding: 0;
-            font-family: 'HarmonyOS Sans SC', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            font-family: 'HarmonyOS Sans SC', 'Noto Color Emoji', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
         }}
 
         .chat-container {{
@@ -813,9 +832,19 @@ class QuotlyRenderer:
             border-radius: 4px;
         }}"""
 
+    # Unicode 双向控制字符及其他不可见格式字符，会导致 HarfBuzz/Skia 渲染报错
+    _BIDI_CONTROL_CHARS = str.maketrans('', '', ''.join(chr(c) for c in (
+        *range(0x200B, 0x2010),  # ZWSP, ZWNJ, ZWJ, LRM, RLM, NNBSP, ZWNBSP
+        *range(0x2028, 0x202F),  # LRE, RLE, PDF, LRO, RLO, NARS, ASS, ISS, AFS
+        *range(0x2066, 0x2070),  # LRI, RLI, FSI, PDI
+        0xFEFF,                   # BOM / ZWNBSP
+        0x034F,                   # CGJ (Combining Grapheme Joiner)
+    )))
+
     def _escape_html(self, text: str) -> str:
         if not text:
             return ""
+        text = text.translate(self._BIDI_CONTROL_CHARS)
         return (text
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -836,9 +865,9 @@ class QuotlyRenderer:
                 parts.append(self._text_to_html(text_part))
 
             image_url = match.group(1)
-            image_data_url = self._get_image_data_url(image_url)
-            if image_data_url:
-                parts.append(f'<img class="msg-image" src="{image_data_url}">')
+            image_src = self._get_local_image_path(image_url)
+            if image_src:
+                parts.append(f'<img class="msg-image" src="{image_src}">')
             else:
                 parts.append('<span class="image-fallback-inline">[图片]</span>')
             last_end = match.end()

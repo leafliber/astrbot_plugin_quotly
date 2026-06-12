@@ -142,3 +142,31 @@ class OneBotClient:
         except Exception as e:
             logger.error(f"获取群成员信息失败: group_id={group_id}, user_id={user_id}, 错误: {type(e).__name__}: {str(e)}")
             return None
+
+    async def download_file(self, url: str) -> Optional[str]:
+        """
+        通过 OneBot download_file API 下载文件，返回本地文件路径
+
+        适用于 HTTP 直接下载失败（如 CDN 链接过期）时，
+        借助 OneBot 实现（Lagrange/go-cqhttp 等）下载。
+
+        Args:
+            url: 文件 URL
+
+        Returns:
+            下载后的本地文件路径，失败返回 None
+        """
+        if not self.api:
+            return None
+
+        try:
+            result = await self.api.call_action('download_file', url=url, thread_cnt=1)
+            if isinstance(result, dict):
+                path = result.get('file') or result.get('body')
+                if path:
+                    logger.debug(f"OneBot download_file 成功: {url[:50]}... -> {path}")
+                    return path
+        except Exception as e:
+            logger.debug(f"OneBot download_file 失败: {url[:50]}..., 错误: {e}")
+
+        return None
