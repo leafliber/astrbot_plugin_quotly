@@ -296,11 +296,17 @@ class QuotlyPlugin(Star):
                 yield result
             return
         
-        if self.qrandom_trigger and message_str.startswith(self.qrandom_trigger):
-            args = message_str[len(self.qrandom_trigger):].strip()
-            async for result in self._handle_random(event, args):
+        if self.qrandom_trigger and message_str == self.qrandom_trigger:
+            async for result in self._handle_random(event, ""):
                 yield result
             return
+
+        if self.qrandom_trigger and message_str.startswith(self.qrandom_trigger) and message_str[len(self.qrandom_trigger):].startswith((" ", "　")):
+            args = message_str[len(self.qrandom_trigger):].strip()
+            if args:
+                async for result in self._handle_search(event, args):
+                    yield result
+                return
 
     @filter.command("q")
     async def quote_command(self, event: AstrMessageEvent):
