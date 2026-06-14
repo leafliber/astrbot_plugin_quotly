@@ -706,6 +706,9 @@ class QuotlyRenderer:
             margin-left: 24px;
             flex-grow: 0;
             flex-shrink: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
         }}
 
         .message-header {{

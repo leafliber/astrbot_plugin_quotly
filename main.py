@@ -711,20 +711,13 @@ class QuotlyPlugin(Star):
                 yield event.plain_result(f"未在{search_scope}找到匹配的 Quotly 记录")
                 return
 
-            selected_results = random.sample(results, min(max_count, len(results)))
-
-            last_idx = len(selected_results) - 1
-            for i, result in enumerate(selected_results):
-                image_path = result.get('image_path')
-                if image_path and Path(image_path).exists():
-                    await asyncio.sleep(random.uniform(0, 2))
-                    chain = [Comp.Image.fromFileSystem(image_path)]
-                    # 附加统计提示到最后一张图片
-                    if i == last_idx and len(results) > max_count:
-                        chain.append(Comp.Plain(f"\n共找到 {len(results)} 条记录，随机显示 {max_count} 条"))
-                    yield event.chain_result(chain)
-                else:
-                    yield event.plain_result(f"图片文件不存在: {image_path}")
+            selected_result = random.choice(results)
+            image_path = selected_result.get('image_path')
+            if image_path and Path(image_path).exists():
+                await asyncio.sleep(random.uniform(0, 2))
+                yield event.chain_result([Comp.Image.fromFileSystem(image_path)])
+            else:
+                yield event.plain_result(f"图片文件不存在: {image_path}")
 
         except Exception as e:
             logger.error(f"搜索失败: {e}")

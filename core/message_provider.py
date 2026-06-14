@@ -200,6 +200,54 @@ class MessageProvider:
             raw_message=mr_message.get_raw_message_dict()
         )
 
+    def _resolve_media_to_local_path(
+        self, segment: dict, fallback_idx: int, extra_paths: list
+    ) -> Optional[str]:
+        """
+        从 message_recorder 消息段解析本地媒体文件的真实绝对路径。
+
+        message_recorder 在不同版本/配置下，本地路径可能落在 local_path、url、file、
+        path、media_url 任一字段；extract_media_paths() 也会给出候选。本方法逐一尝试，
+        兼容绝对路径、media 相对路径、含 /media/ 前缀的绝对路径等多种格式。
+
+        无法解析为已存在的本地文件时返回 None（通常是 http URL 或文件未被下载，
+        调用方应回退到原始 URL，交由下游自行下载）。
+        """
+        if not self._mr_api:
+            return None
+
+        from pathlib import Path as PathLib
+
+        candidates = []
+        for key in ("local_path", "url", "file", "path", "media_url"):
+            val = segment.get(key)
+            if isinstance(val, str) and val:
+                candidates.append(val)
+        if fallback_idx < len(extra_paths) and extra_paths[fallback_idx]:
+            candidates.append(extra_paths[fallback_idx])
+
+        for candidate in candidates:
+            if candidate.startswith(("http://", "https://", "data:", "base64:")):
+                continue
+
+            try:
+                if PathLib(candidate).is_file():
+                    return str(PathLib(candidate).resolve())
+            except (OSError, ValueError):
+                pass
+
+            abs_path = self._mr_api.get_media_absolute_path(candidate)
+            if abs_path and abs_path.exists():
+                return str(abs_path)
+
+            marker = "/media/"
+            if marker in candidate:
+                abs_path = self._mr_api.get_media_absolute_path(candidate.split(marker, 1)[1])
+                if abs_path and abs_path.exists():
+                    return str(abs_path)
+
+        return None
+
     def _convert_mr_chain_to_onebot(self, chain: list, mr_message=None) -> list:
         """
         将 message_recorder 消息链格式转换为 OneBot11 格式
@@ -253,33 +301,15 @@ class MessageProvider:
             if mr_type in ("Plain", "Text"):
                 ob_segment["data"]["text"] = segment.get("text", "")
             elif mr_type == "Image":
-                local_path = segment.get("local_path", "")
-                media_url = segment.get("media_url", "")
                 original_url = segment.get("url", "") or segment.get("file", "")
 
-                resolved = False
-                if self._mr_api:
-                    from pathlib import Path as PathLib
-                    # 按优先级尝试多个路径候选，获取 message_recorder 已下载的本地文件
-                    candidates = []
-                    if local_path:
-                        candidates.append(str(local_path) if isinstance(local_path, PathLib) else local_path)
-                    if media_url:
-                        # media_url 可能是 web 路径，尝试提取相对路径
-                        candidates.append(media_url.lstrip('/'))
-                    # extract_media_paths() 提取的路径作为额外候选
-                    if img_segment_idx < len(extra_media_paths):
-                        candidates.append(extra_media_paths[img_segment_idx])
-
-                    for candidate in candidates:
-                        abs_path = self._mr_api.get_media_absolute_path(candidate)
-                        if abs_path and abs_path.exists():
-                            ob_segment["data"]["url"] = str(abs_path)
-                            ob_segment["data"]["local_path"] = str(abs_path)
-                            resolved = True
-                            break
-
-                if not resolved:
+                resolved_path = self._resolve_media_to_local_path(
+                    segment, img_segment_idx, extra_media_paths
+                )
+                if resolved_path:
+                    ob_segment["data"]["url"] = resolved_path
+                    ob_segment["data"]["local_path"] = resolved_path
+                else:
                     ob_segment["data"]["url"] = original_url
                 ob_segment["data"]["file"] = segment.get("file", "")
                 img_segment_idx += 1
