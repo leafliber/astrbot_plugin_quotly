@@ -21,6 +21,12 @@
         "type": "string",
         "hint": "触发 /qrandom 指令的关键词，留空则不启用无斜杠触发",
         "default": ""
+      },
+      "qm_trigger": {
+        "description": "上传图片触发词",
+        "type": "string",
+        "hint": "触发 /qm 指令的关键词（直接上传图片到语录库），留空则不启用无斜杠触发",
+        "default": ""
       }
     }
   },

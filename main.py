@@ -54,6 +54,7 @@ class QuotlyPlugin(Star):
         self.q_trigger = ""
         self.qsearch_trigger = ""
         self.qrandom_trigger = ""
+        self.qm_trigger = ""
         self._load_config()
 
         self._font_init_task = asyncio.create_task(self._init_fonts())
@@ -78,7 +79,8 @@ class QuotlyPlugin(Star):
         self.q_trigger = trigger_words.get("q_trigger", "").strip()
         self.qsearch_trigger = trigger_words.get("qsearch_trigger", "").strip()
         self.qrandom_trigger = trigger_words.get("qrandom_trigger", "").strip()
-        logger.info(f"触发词配置: q={self.q_trigger or '未设置'}, qsearch={self.qsearch_trigger or '未设置'}, qrandom={self.qrandom_trigger or '未设置'}")
+        self.qm_trigger = trigger_words.get("qm_trigger", "").strip()
+        logger.info(f"触发词配置: q={self.q_trigger or '未设置'}, qsearch={self.qsearch_trigger or '未设置'}, qrandom={self.qrandom_trigger or '未设置'}, qm={self.qm_trigger or '未设置'}")
 
         render_options = self.config.get("render_options", {})
         self.show_title = render_options.get("show_title", True)
@@ -121,6 +123,47 @@ class QuotlyPlugin(Star):
                     if url:
                         image_urls.append(url)
         
+        return image_urls
+
+    def _extract_image_urls_from_event(self, event) -> list:
+        """
+        从事件消息段中提取图片URL（支持 dict 和对象形式的消息段）
+
+        Args:
+            event: AstrMessageEvent 对象
+
+        Returns:
+            图片URL列表
+        """
+        image_urls = []
+        message_segments = getattr(event.message_obj, 'message', None)
+        if not message_segments:
+            return image_urls
+
+        for segment in message_segments:
+            if isinstance(segment, str):
+                continue
+
+            url = None
+            if isinstance(segment, dict):
+                seg_type = segment.get("type")
+                seg_data = segment.get("data", {})
+                if seg_type == "image":
+                    url = seg_data.get("url", "") or seg_data.get("file", "")
+                elif seg_type == "mface":
+                    url = seg_data.get("url", "")
+            else:
+                seg_type = self.parser._get_segment_type(segment)
+                if seg_type in ("image", "mface"):
+                    data = getattr(segment, 'data', {})
+                    if isinstance(data, dict):
+                        url = data.get("url", "") or data.get("file", "")
+                    if not url:
+                        url = getattr(segment, 'url', '') or getattr(segment, 'file', '') or getattr(segment, 'path', '')
+
+            if url:
+                image_urls.append(url)
+
         return image_urls
 
     def _truncate_base64_in_message(self, message: list, max_len: int = 50) -> list:
@@ -182,6 +225,45 @@ class QuotlyPlugin(Star):
             logger.warning(f"OCR识别失败: {e}")
             return ""
 
+    async def _download_image_bytes(self, image_url: str):
+        """
+        下载（或读取本地）图片，返回字节数据
+
+        Args:
+            image_url: 图片 URL、本地文件路径或 data: URL
+
+        Returns:
+            图片字节数据，失败返回 None
+        """
+        try:
+            # 本地文件路径：直接读取
+            from pathlib import Path as PathLib
+            local_path = PathLib(image_url)
+            if local_path.is_file():
+                return local_path.read_bytes()
+
+            # data: URL：解码 base64
+            if image_url.startswith('data:'):
+                import base64
+                import re
+                match = re.match(r'data:[^;]+;base64,(.+)', image_url, re.DOTALL)
+                if match:
+                    return base64.b64decode(match.group(1))
+                return None
+
+            # 远程 URL：下载
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+                    logger.warning(f"下载图片失败: HTTP {resp.status}")
+                    return None
+
+        except Exception as e:
+            logger.warning(f"获取图片失败: {e}")
+            return None
+
     async def _download_and_hash_image(self, image_url: str) -> str:
         """
         下载（或读取本地）图片并计算hash
@@ -192,55 +274,15 @@ class QuotlyPlugin(Star):
         Returns:
             图片hash值，失败返回空字符串
         """
-        try:
-            # 本地文件路径：直接读取
-            from pathlib import Path as PathLib
-            local_path = PathLib(image_url)
-            if local_path.is_file():
-                image_data = local_path.read_bytes()
-                image_hash = compute_phash(image_data)
-                if image_hash:
-                    logger.debug(f"本地图片hash计算成功: {image_hash}")
-                    return image_hash
-                else:
-                    logger.warning("本地图片hash计算失败")
-                    return ""
-
-            # data: URL：解码 base64
-            if image_url.startswith('data:'):
-                import base64
-                import re
-                match = re.match(r'data:[^;]+;base64,(.+)', image_url, re.DOTALL)
-                if match:
-                    image_data = base64.b64decode(match.group(1))
-                    image_hash = compute_phash(image_data)
-                    if image_hash:
-                        logger.debug(f"data URL 图片hash计算成功: {image_hash}")
-                        return image_hash
-                logger.warning("data URL 图片hash计算失败")
-                return ""
-
-            # 远程 URL：下载
-            import aiohttp
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 200:
-                        image_data = await resp.read()
-                        image_hash = compute_phash(image_data)
-                        if image_hash:
-                            logger.debug(f"图片hash计算成功: {image_hash}")
-                            return image_hash
-                        else:
-                            logger.warning("图片hash计算失败")
-                    else:
-                        logger.warning(f"下载图片失败: HTTP {resp.status}")
-
+        image_data = await self._download_image_bytes(image_url)
+        if not image_data:
             return ""
-
-        except Exception as e:
-            logger.warning(f"获取图片失败: {e}")
-            return ""
+        image_hash = compute_phash(image_data)
+        if image_hash:
+            logger.debug(f"图片hash计算成功: {image_hash}")
+        else:
+            logger.warning("图片hash计算失败")
+        return image_hash
 
     async def _background_ocr_update(self, image_hash: str, ocr_tasks_data: list, storage_messages: list, umo: str):
         """
@@ -307,6 +349,11 @@ class QuotlyPlugin(Star):
                 async for result in self._handle_search(event, args):
                     yield result
                 return
+
+        if self.qm_trigger and message_str == self.qm_trigger:
+            async for result in self._handle_upload(event):
+                yield result
+            return
 
     @filter.command("q")
     async def quote_command(self, event: AstrMessageEvent):
@@ -888,6 +935,92 @@ class QuotlyPlugin(Star):
             logger.error(f"删除语录失败: {e}")
             logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
             yield event.plain_result(f"删除失败: {str(e)}")
+
+    @filter.command("qm")
+    async def upload_command(self, event: AstrMessageEvent):
+        """
+        直接上传图片到语录库
+        用法: /qm（附带图片，或回复一条包含图片的消息）
+        根据插件 OCR 设置决定是否对图片进行文字识别
+        """
+        async for result in self._handle_upload(event):
+            yield result
+
+    async def _handle_upload(self, event: AstrMessageEvent):
+        self.onebot.set_event(event)
+
+        group_id_str = getattr(event.message_obj, 'group_id', None)
+        group_id = None
+        if group_id_str:
+            try:
+                group_id = int(group_id_str)
+            except (ValueError, TypeError):
+                pass
+
+        # 优先从当前消息中提取图片
+        image_urls = self._extract_image_urls_from_event(event)
+
+        # 如果当前消息没有图片，尝试从被回复的消息中获取
+        if not image_urls:
+            reply_id = self.parser.parse_reply(event)
+            if reply_id is None:
+                yield event.plain_result("请附带图片，或回复一条包含图片的消息后使用 /qm 指令")
+                return
+
+            msg_data = await self.message_provider.get_message_by_id(reply_id, group_id)
+            if msg_data is None:
+                yield event.plain_result("无法获取被回复的消息内容，请确认消息是否存在")
+                return
+
+            image_urls = self._extract_image_urls(msg_data.get("message", []))
+
+        if not image_urls:
+            yield event.plain_result("未找到可上传的图片")
+            return
+
+        saved_count = 0
+        duplicate_count = 0
+        failed_count = 0
+
+        for image_url in image_urls:
+            image_data = await self._download_image_bytes(image_url)
+            if not image_data:
+                failed_count += 1
+                logger.warning(f"下载图片失败: {image_url}")
+                continue
+
+            image_hash = compute_phash(image_data)
+            if not image_hash:
+                failed_count += 1
+                logger.warning("图片hash计算失败，跳过")
+                continue
+
+            # 检查重复
+            duplicates = await self.db.find_by_hash(image_hash, threshold=5)
+            if duplicates:
+                duplicate_count += 1
+                logger.debug(f"图片已存在，跳过: hash={image_hash}")
+                continue
+
+            # 保存记录
+            placeholder_messages = [{"content": "", "ocr_text": ""}]
+            record_id = await self.db.save_record(image_hash, image_data, group_id=group_id, messages=placeholder_messages)
+            saved_count += 1
+            logger.info(f"图片上传成功: record_id={record_id}, hash={image_hash}")
+
+            # 如果启用OCR，执行OCR识别
+            if self.enable_ocr:
+                await self._do_upload_ocr(record_id, image_data)
+
+        parts = []
+        if saved_count:
+            parts.append(f"成功上传 {saved_count} 张图片")
+        if duplicate_count:
+            parts.append(f"{duplicate_count} 张图片已存在（已跳过）")
+        if failed_count:
+            parts.append(f"{failed_count} 张图片上传失败")
+
+        yield event.plain_result("，".join(parts) if parts else "上传完成")
 
     @filter.llm_tool(name="qsearch")
     async def qsearch_tool(self, event: AstrMessageEvent, keyword: str, user_id: str = "", group_id: str = "", global_search: str = "false") -> MessageEventResult:

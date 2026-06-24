@@ -361,6 +361,7 @@ class QuotlyRenderer:
     def _build_html_and_css(self, messages: List[dict], show_title: bool = True,
                             show_time: bool = True, show_date: bool = True) -> Tuple[str, str, list]:
         font_css = self._build_font_css()
+        self._reset_image_sizing()
         messages_html = ""
         is_first_date = True
         avatar_data_list = []
@@ -421,7 +422,7 @@ class QuotlyRenderer:
             if reply_info:
                 reply_nickname = self._escape_html(reply_info.get('nickname', ''))
                 reply_content = reply_info.get('content', '')
-                reply_content_html, _ = self._parse_content(reply_content)
+                reply_content_html, _ = self._parse_content(reply_content, 150, 80)
                 reply_html = f'''
                 <div class="reply-preview">
                     <div class="reply-header">
@@ -438,7 +439,9 @@ class QuotlyRenderer:
                 bubble_class = "bubble image-only"
                 image_src = self._get_local_image_path(image_url)
                 if image_src:
-                    content_html = f'<img class="msg-image-full" src="{image_src}">'
+                    size_class = self._image_size_class(image_url, 600, 800)
+                    img_class = "msg-image-full" + (f" {size_class}" if size_class else "")
+                    content_html = f'<img class="{img_class}" src="{image_src}">'
                 else:
                     content_html = '<div class="image-fallback">[图片]</div>'
             else:
@@ -460,9 +463,49 @@ class QuotlyRenderer:
             """
 
         css = self._build_css(font_css)
+        if self._image_size_rules:
+            css += "\n" + "\n".join(self._image_size_rules.values())
         html = f'<div class="chat-container">{messages_html}</div>'
 
         return html, css, avatar_data_list
+
+    def _reset_image_sizing(self):
+        """每次渲染前重置图片尺寸规则收集器"""
+        self._image_size_rules = {}
+        self._image_size_counter = 0
+
+    def _image_size_class(self, url: str, max_w: int, max_h: int) -> str:
+        """
+        为图片计算等比缩放后的精确 width/height，返回唯一 CSS class 名。
+
+        规避 pictex ImageNode 的 measure 只返回固有像素尺寸、max-width 只裁宽不按比例
+        缩放的问题——宽图会被裁成只剩中间。改为在 CSS 里给每张图精确尺寸，让 box 与
+        图片宽高比一致，从而完整显示。
+
+        读不到本地尺寸时返回空串（调用方回退到 max-width 约束）。
+        """
+        local = self._get_local_image_path(url)
+        if not local:
+            return ""
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(local) as im:
+                iw, ih = im.size
+        except Exception:
+            return ""
+        if iw <= 0 or ih <= 0:
+            return ""
+
+        scale = min(max_w / iw, max_h / ih, 1.0)
+        dw = max(1, round(iw * scale))
+        dh = max(1, round(ih * scale))
+        self._image_size_counter += 1
+        cls = f"qimg-{self._image_size_counter}"
+        # 同时解除 .msg-image 的 min-width/min-height 约束，确保精确尺寸完全生效
+        self._image_size_rules[cls] = (
+            f".{cls} {{ width: {dw}px; height: {dh}px; min-width: 0; min-height: 0; }}"
+        )
+        return cls
 
     def _get_local_image_path(self, url: str) -> str:
         if not url:
@@ -855,7 +898,7 @@ class QuotlyRenderer:
                 .replace('"', "&quot;")
                 .replace("'", "&#39;"))
 
-    def _parse_content(self, content: str) -> tuple:
+    def _parse_content(self, content: str, max_w: int = 600, max_h: int = 800) -> tuple:
         import re
 
         image_pattern = r'\[图片\]\(([^)]+)\)'
@@ -870,7 +913,9 @@ class QuotlyRenderer:
             image_url = match.group(1)
             image_src = self._get_local_image_path(image_url)
             if image_src:
-                parts.append(f'<img class="msg-image" src="{image_src}">')
+                size_class = self._image_size_class(image_url, max_w, max_h)
+                img_class = "msg-image" + (f" {size_class}" if size_class else "")
+                parts.append(f'<img class="{img_class}" src="{image_src}">')
             else:
                 parts.append('<span class="image-fallback-inline">[图片]</span>')
             last_end = match.end()
