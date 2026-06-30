@@ -170,3 +170,29 @@ class OneBotClient:
             logger.debug(f"OneBot download_file 失败: {url[:50]}..., 错误: {e}")
 
         return None
+
+    async def get_image(self, file: str) -> Optional[dict]:
+        """
+        通过 OneBot get_image API 获取图片信息
+
+        当图片 URL 是 OneBot 实现本地路径（如 Docker 容器内路径）无法直接访问时，
+        可通过文件名/文件 ID 调用此 API 获取可访问的 URL 或本地路径。
+
+        Args:
+            file: 图片文件 ID 或文件名
+
+        Returns:
+            包含 size, filename, url 等字段的字典，失败返回 None
+        """
+        if not self.api:
+            return None
+
+        try:
+            result = await self.api.call_action('get_image', file=file)
+            if isinstance(result, dict):
+                logger.debug(f"OneBot get_image 成功: {file} -> {result.get('url', '')[:80]}")
+                return result
+        except Exception as e:
+            logger.debug(f"OneBot get_image 失败: {file}, 错误: {e}")
+
+        return None

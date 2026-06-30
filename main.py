@@ -229,40 +229,99 @@ class QuotlyPlugin(Star):
         """
         下载（或读取本地）图片，返回字节数据
 
+        优先委托给 AstrBot 官方 MediaResolver，自动处理 http(s)、file:///、
+        base64://、data: 以及裸本地路径等所有来源，并自动清理临时文件。
+        官方解析器失败时依次回退：Docker 容器内路径映射、OneBot download_file API。
+
         Args:
-            image_url: 图片 URL、本地文件路径或 data: URL
+            image_url: 图片 URL、本地文件路径、file:/// URI 或 data: URL
 
         Returns:
             图片字节数据，失败返回 None
         """
+        from pathlib import Path as PathLib
+
         try:
-            # 本地文件路径：直接读取
-            from pathlib import Path as PathLib
-            local_path = PathLib(image_url)
-            if local_path.is_file():
-                return local_path.read_bytes()
+            from astrbot.core.utils.media_utils import MediaResolver
 
-            # data: URL：解码 base64
-            if image_url.startswith('data:'):
-                import base64
-                import re
-                match = re.match(r'data:[^;]+;base64,(.+)', image_url, re.DOTALL)
-                if match:
-                    return base64.b64decode(match.group(1))
-                return None
-
-            # 远程 URL：下载
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 200:
-                        return await resp.read()
-                    logger.warning(f"下载图片失败: HTTP {resp.status}")
-                    return None
-
+            # 官方解析器：统一处理 http/file:///base64:///data:/裸路径
+            data = await MediaResolver(image_url, media_type="image").to_bytes()
+            if data:
+                return data
+            logger.warning(f"MediaResolver 返回空数据: {image_url}")
         except Exception as e:
-            logger.warning(f"获取图片失败: {e}")
-            return None
+            logger.warning(f"MediaResolver 下载失败: {image_url}, 错误: {type(e).__name__}: {e}")
+
+        # 回退1：非 http(s) 的本地路径，尝试 Docker 容器内路径映射 / OneBot get_image
+        if not image_url.startswith(("http://", "https://", "data:", "base64://")):
+            resolved = await self._resolve_inaccessible_local_path(image_url)
+            if resolved:
+                return resolved
+
+        # 回退2：对 http(s) URL 尝试通过 OneBot download_file API 下载
+        if image_url.startswith(("http://", "https://")) and self.onebot and self.onebot.api:
+            dl_path = await self.onebot.download_file(image_url)
+            if dl_path:
+                try:
+                    return PathLib(dl_path).read_bytes()
+                except Exception:
+                    pass
+
+        return None
+
+    async def _resolve_inaccessible_local_path(self, image_url: str):
+        """
+        尝试解析无法直接访问的本地路径（如 Docker 容器内路径）
+
+        策略：
+        1. 尝试将路径映射到当前 AstrBot 根目录下
+        2. 尝试通过 OneBot get_image API 获取图片
+
+        Args:
+            image_url: 无法直接访问的本地路径
+
+        Returns:
+            图片字节数据，失败返回 None
+        """
+        from pathlib import Path as PathLib
+
+        # 策略1：尝试将路径映射到当前 AstrBot 根目录
+        # 例如 /AstrBot/data/temp/xxx.jpg -> <actual_root>/data/temp/xxx.jpg
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_root
+            actual_root = PathLib(get_astrbot_root())
+            if "/data/" in image_url:
+                relative_part = image_url[image_url.index("/data/"):]
+                resolved_path = actual_root / relative_part.lstrip("/")
+                if resolved_path.is_file():
+                    logger.debug(f"路径映射成功: {image_url} -> {resolved_path}")
+                    return resolved_path.read_bytes()
+        except Exception:
+            pass
+
+        # 策略2：通过 OneBot get_image API 获取图片
+        if self.onebot and self.onebot.api:
+            file_name = PathLib(image_url).name
+            try:
+                img_info = await self.onebot.get_image(file_name)
+                if img_info:
+                    # get_image 返回的 url 可能是 HTTP URL 或本地路径
+                    returned_url = img_info.get("url", "")
+                    if returned_url:
+                        if returned_url.startswith(("http://", "https://")):
+                            import aiohttp
+                            async with aiohttp.ClientSession() as session:
+                                async with session.get(returned_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                                    if resp.status == 200:
+                                        logger.debug(f"OneBot get_image 下载成功: {file_name}")
+                                        return await resp.read()
+                        elif PathLib(returned_url).is_file():
+                            logger.debug(f"OneBot get_image 本地路径: {returned_url}")
+                            return PathLib(returned_url).read_bytes()
+            except Exception as e:
+                logger.debug(f"OneBot get_image 回退失败: {e}")
+
+        return None
 
     async def _download_and_hash_image(self, image_url: str) -> str:
         """
