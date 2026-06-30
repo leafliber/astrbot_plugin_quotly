@@ -74,6 +74,33 @@ class QuotlyPlugin(Star):
         """通过 OneBot download_file API 下载图片，作为 HTTP 直接下载的备用方案"""
         return await self.onebot.download_file(url)
 
+    async def _download_image_to_temp_file(self, url: str):
+        """下载图片到临时文件，返回文件路径，供渲染器预加载使用。
+
+        基于 _download_image_bytes（含 MediaResolver + 路径映射 + OneBot 回退），
+        能处理 http URL、file:/// URI、message_recorder 本地路径等各种来源。
+        """
+        image_data = await self._download_image_bytes(url)
+        if not image_data:
+            return None
+        try:
+            import tempfile
+            lower_url = url.lower()
+            if lower_url.endswith((".jpg", ".jpeg")):
+                suffix = ".jpg"
+            elif lower_url.endswith(".gif"):
+                suffix = ".gif"
+            elif lower_url.endswith(".webp"):
+                suffix = ".webp"
+            else:
+                suffix = ".png"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+                f.write(image_data)
+                return f.name
+        except Exception as e:
+            logger.warning(f"写入临时图片文件失败: {e}")
+            return None
+
     def _load_config(self):
         trigger_words = self.config.get("trigger_words", {})
         self.q_trigger = trigger_words.get("q_trigger", "").strip()
@@ -193,11 +220,15 @@ class QuotlyPlugin(Star):
     async def _ocr_image(self, image_url: str, umo: str) -> str:
         """
         使用AstrBot的视觉模型对图片进行OCR识别
-        
+
+        先通过 _download_image_bytes 下载图片（兼容 http URL、file:/// URI、
+        message_recorder 本地路径、容器内路径等所有来源），转为 data URL 后
+        再传给 LLM，避免 LLM 无法访问本地/容器路径导致 OCR 失败。
+
         Args:
             image_url: 图片URL
             umo: unified_msg_origin，用于获取当前会话的聊天模型
-            
+
         Returns:
             OCR识别结果文本
         """
@@ -206,21 +237,31 @@ class QuotlyPlugin(Star):
             if not provider_id:
                 logger.warning("OCR识别失败: 无法获取当前会话的聊天模型")
                 return ""
-            
+
+            # 先下载图片转 data URL，兼容本地路径、容器路径等所有来源
+            image_urls_for_llm = [image_url]
+            image_data = await self._download_image_bytes(image_url)
+            if image_data:
+                import base64
+                data_url = f"data:image/png;base64,{base64.b64encode(image_data).decode()}"
+                image_urls_for_llm = [data_url]
+            else:
+                logger.warning(f"OCR: 图片下载失败，回退到原始URL: {image_url[:80]}")
+
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt="请识别这张图片中的所有文字内容，只输出识别到的文字，不要添加任何解释或说明。如果图片中没有文字，请输出：[无文字]",
-                image_urls=[image_url]
+                image_urls=image_urls_for_llm
             )
-            
+
             if llm_resp and llm_resp.completion_text:
                 ocr_text = llm_resp.completion_text.strip()
                 if ocr_text and ocr_text != "[无文字]":
                     logger.debug(f"OCR识别成功: {ocr_text[:100]}...")
                     return ocr_text
-            
+
             return ""
-            
+
         except Exception as e:
             logger.warning(f"OCR识别失败: {e}")
             return ""
@@ -636,7 +677,7 @@ class QuotlyPlugin(Star):
                 show_title=show_title,
                 show_time=show_time,
                 show_date=show_date,
-                image_download_fallback=self._download_image_via_onebot
+                image_download_fallback=self._download_image_to_temp_file
             )
 
             image_hash = compute_phash(png_data) or "unknown"
