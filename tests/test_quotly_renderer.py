@@ -1,5 +1,5 @@
 """
-渲染器单元测试 - html2pic 版本
+渲染器单元测试 - pytakumi 版本
 """
 
 import sys

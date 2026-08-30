@@ -1,16 +1,21 @@
 """
-引用消息渲染器 - 使用 html2pic 渲染 HTML
+引用消息渲染器 - 使用 pytakumi 渲染 HTML
 QQ 聊天气泡样式 1:1 复刻
 
-html2pic 基于 Skia + Taffy + HarfBuzz，纯 pip 安装，无需浏览器。
+pytakumi 是 Rust 布局引擎 Takumi 的 Python 绑定，纯 pip 安装，
+无需浏览器和任何系统依赖。圆形头像通过 CSS border-radius: 50% +
+object-fit: cover 由引擎原生裁剪，不再需要 html2pic 时代的
+品红占位符 + 像素扫描 + Pillow 后处理方案。
 
-注意：html2pic 在 flex 布局中 border-radius 无法正确裁剪背景，
-因此头像采用 Pillow 后处理方案——先用 html2pic 渲染整体布局，
-再用 Pillow 将方形头像区域替换为圆形头像。
+卡片宽度采用两遍渲染：先 measure 出贴合内容的固有宽度
+（受 .chat-container max-width 约束），再按该宽度出图，
+复刻旧引擎 CONTENT_BOX 裁剪的"卡片贴合内容"效果。
 """
 
 import asyncio
+import base64
 import hashlib
+import io
 import pathlib
 import time
 from collections import OrderedDict
@@ -41,10 +46,14 @@ FONT_WEIGHT_MAP = {
 AVATAR_MEMORY_CACHE_SIZE = 200
 AVATAR_DISK_CACHE_TTL = 86400
 
-# html2pic 在 flex 布局中 border-radius 无法裁剪背景，头像用 Pillow 后处理
-# 此颜色用作头像占位标记，渲染后扫描替换为圆形头像
-_AVATAR_MARKER_RGB = (255, 0, 255)  # 品红 #FF00FF
 AVATAR_SIZE = 80
+
+# 卡片宽度约束，与 .chat-container 的 min/max-width 保持一致
+RENDER_WIDTH_MIN = 200
+RENDER_WIDTH_MAX = 1200
+
+# CJK 场景建议在首次渲染前调大字形缓存（pytakumi 官方建议）
+_GLYPH_CACHE_BYTES = 64 * 1024 * 1024
 
 
 class LRUCache:
@@ -75,6 +84,12 @@ class QuotlyRenderer:
     _fonts_ready = False
     _font_lock = asyncio.Lock()
     _avatar_cache: Optional[LRUCache] = None
+
+    # pytakumi Renderer 进程级单例，复用字形/图片解码缓存
+    _engine = None
+    _engine_lock = asyncio.Lock()
+    # 原生渲染对象不做并发调用假设，串行化出图
+    _render_lock = asyncio.Lock()
 
     def __init__(self):
         if HAS_ASTRBOT_PATH:
@@ -154,25 +169,55 @@ class QuotlyRenderer:
             logger.warning(f"字体下载失败: {font_file}, 错误: {e}")
         return False
 
-    def _build_font_css(self) -> str:
-        font_faces = []
-        for font_file, weight in FONT_WEIGHT_MAP.items():
-            font_path = self._fonts_dir / font_file
-            if font_path.exists():
-                font_faces.append(
-                    f"@font-face {{ font-family: 'HarmonyOS Sans SC'; "
-                    f"src: url('{font_path}') format('truetype'); "
-                    f"font-weight: {weight}; font-style: normal; }}"
-                )
+    async def _ensure_engine(self):
+        """创建 pytakumi Renderer 单例并注册字体，进程内只执行一次"""
+        if QuotlyRenderer._engine is not None:
+            return
 
-        emoji_path = self._fonts_dir / "NotoColorEmoji.ttf"
-        if emoji_path.exists():
-            font_faces.append(
-                f"@font-face {{ font-family: 'Noto Color Emoji'; "
-                f"src: url('{emoji_path}') format('truetype'); }}"
-            )
+        async with QuotlyRenderer._engine_lock:
+            if QuotlyRenderer._engine is not None:
+                return
 
-        return "\n".join(font_faces) if font_faces else ""
+            def _build_engine():
+                import pytakumi
+                pytakumi.set_glyph_cache_max_bytes(_GLYPH_CACHE_BYTES)
+                engine = pytakumi.Renderer(cache_max_bytes=_GLYPH_CACHE_BYTES)
+
+                registered = []
+                for font_file, weight in FONT_WEIGHT_MAP.items():
+                    font_path = self._fonts_dir / font_file
+                    if font_path.exists():
+                        try:
+                            engine.register_font(
+                                font_path.read_bytes(),
+                                name="HarmonyOS Sans SC",
+                                weight=weight,
+                            )
+                            registered.append(font_file)
+                        except Exception as e:
+                            logger.warning(f"字体注册失败: {font_file}, {e}")
+
+                emoji_path = self._fonts_dir / "NotoColorEmoji.ttf"
+                if emoji_path.exists():
+                    try:
+                        engine.register_font(emoji_path.read_bytes(), name="Noto Color Emoji")
+                        registered.append("NotoColorEmoji.ttf")
+                    except Exception as e:
+                        # emoji 字体（CBDT 彩色格式）注册失败不影响正文渲染
+                        logger.warning(f"emoji 字体注册失败（不影响正文渲染）: {e}")
+
+                return engine, registered
+
+            try:
+                engine, registered = await asyncio.to_thread(_build_engine)
+            except ImportError as e:
+                raise ImportError(
+                    f"pytakumi 导入失败: {e}\n"
+                    "请确认已执行 pip install -r requirements.txt。"
+                ) from e
+
+            QuotlyRenderer._engine = engine
+            logger.info(f"pytakumi 渲染引擎初始化完成，已注册字体: {registered}")
 
     async def cleanup(self):
         QuotlyRenderer._instance_count = max(0, QuotlyRenderer._instance_count - 1)
@@ -183,6 +228,7 @@ class QuotlyRenderer:
         start_time = time.time()
 
         await self.ensure_fonts()
+        await self._ensure_engine()
 
         self._image_download_fallback = image_download_fallback
 
@@ -200,65 +246,39 @@ class QuotlyRenderer:
             preload_tasks = [self._preload_image(url) for url in image_urls]
             await asyncio.gather(*preload_tasks, return_exceptions=True)
 
-        html, css, avatar_data_list = self._build_html_and_css(messages, show_title=show_title, show_time=show_time,
-                                              show_date=show_date)
+        html, css, images_map = self._build_html_and_css(messages, show_title=show_title, show_time=show_time,
+                                                         show_date=show_date)
+
+        import pytakumi
 
         try:
-            from html2pic import Html2Pic
-            from pictex import CropMode
-        except ImportError as e:
-            raise ImportError(
-                f"html2pic 导入失败: {e}\n"
-                "请确认已执行 pip install -r requirements.txt。\n"
-                "Linux 用户可能需要先安装系统依赖，详见 README「系统依赖」章节。"
-            ) from e
-
-        try:
-            renderer = Html2Pic(html, css)
-            image = renderer.render(crop_mode=CropMode.CONTENT_BOX)
+            tree = pytakumi.from_html(html)
         except Exception as e:
-            raise RuntimeError(
-                f"html2pic 渲染失败: {e}\n"
-                "Linux/Docker 用户请确认已安装 fontconfig 和 OpenGL 系统库，详见 README「系统依赖」章节。"
-            ) from e
+            raise RuntimeError(f"pytakumi HTML 解析失败: {e}") from e
 
-        import io
-        from PIL import Image, ImageDraw, ImageFont
-        import numpy as np
+        def _do_render():
+            # 两遍渲染：先测固有宽度（受 max-width 约束），再按该宽度出图
+            measured = QuotlyRenderer._engine.measure(
+                tree, width=None, stylesheets=[css],
+                images=images_map if images_map else None,
+            )
+            content_width = int(measured.get("width") or RENDER_WIDTH_MAX)
+            content_width = max(RENDER_WIDTH_MIN, min(content_width, RENDER_WIDTH_MAX))
+            return QuotlyRenderer._engine.render(
+                tree, width=content_width, stylesheets=[css],
+                images=images_map if images_map else None,
+            )
 
-        try:
-            pil_image = image.to_pillow().convert("RGBA")
-        except Exception as e:
-            raise RuntimeError(
-                f"图像转换失败: {e}\n"
-                "请确认 Pillow 和 numpy 已正确安装（pip install Pillow numpy）。"
-            ) from e
-
-        # 后处理：将方形头像标记替换为圆形头像
-        if avatar_data_list:
-            from PIL import Image as PILImage
-            arr = np.array(pil_image)
-            marker_rgb = np.array(_AVATAR_MARKER_RGB, dtype=np.uint8)
-            marker_positions = self._find_avatar_markers(arr, marker_rgb)
-
-            for idx, (ax, ay) in enumerate(marker_positions):
-                if idx >= len(avatar_data_list):
-                    break
-                avatar_info = avatar_data_list[idx]
-                avatar_img = self._create_avatar_image(avatar_info)
-                if avatar_img:
-                    # 先用背景色填充标记区域（清除标记色），再粘贴圆形头像
-                    bg_box = PILImage.new("RGBA", (AVATAR_SIZE, AVATAR_SIZE), (235, 235, 240, 255))
-                    pil_image.paste(bg_box, (ax, ay))
-                    pil_image.paste(avatar_img, (ax, ay), avatar_img)
-
-        buf = io.BytesIO()
-        pil_image.save(buf, format="PNG")
+        async with QuotlyRenderer._render_lock:
+            try:
+                png_data = await asyncio.to_thread(_do_render)
+            except Exception as e:
+                raise RuntimeError(f"pytakumi 渲染失败: {e}") from e
 
         elapsed = time.time() - start_time
         logger.debug(f"渲染完成，耗时: {elapsed:.2f}秒")
 
-        return buf.getvalue()
+        return png_data
 
     @staticmethod
     def _extract_image_urls(content: str) -> list:
@@ -339,32 +359,48 @@ class QuotlyRenderer:
         if not downloaded:
             logger.warning(f"图片预加载全部失败: {url[:80]}...")
 
-    def _get_avatar_src(self, url: str) -> str:
+    def _get_image_bytes(self, url: str) -> Optional[bytes]:
+        """解析消息中的图片引用为字节：data URL / 本地路径 / 磁盘缓存"""
         if not url:
-            return ""
+            return None
 
         if url.startswith('data:'):
-            return url
+            return self._decode_data_url(url)
+
+        if Path(url).is_file():
+            try:
+                return Path(url).read_bytes()
+            except Exception as e:
+                logger.debug(f"读取本地图片失败: {url}, {e}")
+                return None
 
         cache_key = self._avatar_cache_key(url)
         disk_path = self._avatars_dir / cache_key
         if disk_path.exists():
             try:
-                mtime = disk_path.stat().st_mtime
-                if time.time() - mtime < AVATAR_DISK_CACHE_TTL:
-                    return str(disk_path)
+                return disk_path.read_bytes()
             except Exception:
-                pass
+                return None
 
-        return ""
+        return None
+
+    @staticmethod
+    def _decode_data_url(url: str) -> Optional[bytes]:
+        """解码 data:image/...;base64,... 形式的内嵌图片"""
+        try:
+            header, _, payload = url.partition(',')
+            if 'base64' in header.lower() and payload:
+                return base64.b64decode(payload)
+        except Exception:
+            pass
+        return None
 
     def _build_html_and_css(self, messages: List[dict], show_title: bool = True,
-                            show_time: bool = True, show_date: bool = True) -> Tuple[str, str, list]:
-        font_css = self._build_font_css()
+                            show_time: bool = True, show_date: bool = True) -> Tuple[str, str, dict]:
         self._reset_image_sizing()
         messages_html = ""
         is_first_date = True
-        avatar_data_list = []
+        images_map = {}
 
         for msg in messages:
             if msg.get('type') == 'date_separator':
@@ -387,21 +423,19 @@ class QuotlyRenderer:
 
             avatar_html = ""
             if avatar_url:
-                avatar_src = self._get_avatar_src(avatar_url)
-                if avatar_src:
-                    # 用标记色方块占位，渲染后 Pillow 替换为圆形头像
-                    avatar_html = '<div class="avatar-marker"></div>'
-                    # 记录头像数据用于后处理
-                    avatar_data_list.append({"type": "image", "src": avatar_src})
+                avatar_bytes = self._get_image_bytes(avatar_url)
+                if avatar_bytes:
+                    mem_key = f"mem://avatar-{len(images_map)}"
+                    images_map[mem_key] = avatar_bytes
+                    # 圆形裁剪由引擎原生完成
+                    avatar_html = f'<img class="avatar" src="{mem_key}">'
 
             if not avatar_html:
                 initial = nickname[0] if nickname else "?"
-                # 用标记色方块占位
-                avatar_html = '<div class="avatar-marker"></div>'
-                avatar_data_list.append({
-                    "type": "placeholder",
-                    "initial": initial,
-                })
+                avatar_html = (
+                    f'<div class="avatar avatar-placeholder">'
+                    f'<span class="avatar-initial">{initial}</span></div>'
+                )
 
             header_html = ""
 
@@ -422,7 +456,7 @@ class QuotlyRenderer:
             if reply_info:
                 reply_nickname = self._escape_html(reply_info.get('nickname', ''))
                 reply_content = reply_info.get('content', '')
-                reply_content_html, _ = self._parse_content(reply_content, 150, 80)
+                reply_content_html = self._parse_content(reply_content, images_map, 150, 80)
                 reply_html = f'''
                 <div class="reply-preview">
                     <div class="reply-header">
@@ -437,15 +471,17 @@ class QuotlyRenderer:
 
             if is_image_only and not reply_html:
                 bubble_class = "bubble image-only"
-                image_src = self._get_local_image_path(image_url)
-                if image_src:
+                image_bytes = self._get_image_bytes(image_url)
+                if image_bytes:
+                    mem_key = f"mem://image-{len(images_map)}"
+                    images_map[mem_key] = image_bytes
                     size_class = self._image_size_class(image_url, 600, 800)
                     img_class = "msg-image-full" + (f" {size_class}" if size_class else "")
-                    content_html = f'<img class="{img_class}" src="{image_src}">'
+                    content_html = f'<img class="{img_class}" src="{mem_key}">'
                 else:
                     content_html = '<div class="image-fallback">[图片]</div>'
             else:
-                content_html_parsed, _ = self._parse_content(content)
+                content_html_parsed = self._parse_content(content, images_map)
                 content_html = f'<div class="message-content">{content_html_parsed}</div>'
 
             messages_html += f"""
@@ -462,12 +498,12 @@ class QuotlyRenderer:
             </div>
             """
 
-        css = self._build_css(font_css)
+        css = self._build_css()
         if self._image_size_rules:
             css += "\n" + "\n".join(self._image_size_rules.values())
         html = f'<div class="chat-container">{messages_html}</div>'
 
-        return html, css, avatar_data_list
+        return html, css, images_map
 
     def _reset_image_sizing(self):
         """每次渲染前重置图片尺寸规则收集器"""
@@ -478,18 +514,17 @@ class QuotlyRenderer:
         """
         为图片计算等比缩放后的精确 width/height，返回唯一 CSS class 名。
 
-        规避 pictex ImageNode 的 measure 只返回固有像素尺寸、max-width 只裁宽不按比例
-        缩放的问题——宽图会被裁成只剩中间。改为在 CSS 里给每张图精确尺寸，让 box 与
-        图片宽高比一致，从而完整显示。
+        显式给每张图精确尺寸，让布局盒与图片宽高比一致，避免引擎按
+        固有尺寸测量导致宽图被裁或比例失真。
 
-        读不到本地尺寸时返回空串（调用方回退到 max-width 约束）。
+        读不到图片尺寸时返回空串（调用方回退到 max-width 约束）。
         """
-        local = self._get_local_image_path(url)
-        if not local:
+        data = self._get_image_bytes(url)
+        if not data:
             return ""
         try:
             from PIL import Image as PILImage
-            with PILImage.open(local) as im:
+            with PILImage.open(io.BytesIO(data)) as im:
                 iw, ih = im.size
         except Exception:
             return ""
@@ -507,198 +542,8 @@ class QuotlyRenderer:
         )
         return cls
 
-    def _get_local_image_path(self, url: str) -> str:
-        if not url:
-            return ""
-
-        if url.startswith('data:'):
-            return ""
-
-        # Local file path - use directly
-        if Path(url).is_file():
-            return url
-
-        cache_key = self._avatar_cache_key(url)
-        disk_path = self._avatars_dir / cache_key
-        if disk_path.exists():
-            return str(disk_path)
-
-        return ""
-
-    @staticmethod
-    def _detect_image_mime(data: bytes) -> str:
-        if data[:8] == b'\x89PNG\r\n\x1a\n':
-            return "image/png"
-        elif data[:2] == b'\xff\xd8':
-            return "image/jpeg"
-        elif len(data) > 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
-            return "image/webp"
-        elif data[:6] in (b'GIF87a', b'GIF89a'):
-            return "image/gif"
-        return "image/png"
-
-    @staticmethod
-    def _find_avatar_markers(arr: "np.ndarray", marker_rgb: "np.ndarray") -> List[Tuple[int, int]]:
-        """扫描渲染结果，找到所有头像标记色的中心坐标，返回头像区域左上角 (x, y)"""
-        import numpy as np
-        h, w = arr.shape[:2]
-
-        # 快速：只扫描标记色存在的行
-        row_matches = np.any(
-            np.all(np.abs(arr[:, :, :3].astype(int) - marker_rgb.astype(int)) < 20, axis=2),
-            axis=1
-        )
-        match_rows = np.where(row_matches)[0]
-        if len(match_rows) == 0:
-            return []
-
-        # 按连续行分组，每组是一个头像（或头像的一部分）
-        groups = []
-        start = match_rows[0]
-        prev = match_rows[0]
-        for r in match_rows[1:]:
-            if r > prev + 5:
-                groups.append((start, prev))
-                start = r
-            prev = r
-        groups.append((start, prev))
-
-        # 合并相邻的组（同一个头像可能被 html2pic 渲染成多段）
-        # 阈值用 AVATAR_SIZE//2 而非 AVATAR_SIZE：短消息时相邻头像间隙约 73px，
-        # 若用 80 会把两条消息的头像错误合并为一组，导致第二个头像不被替换。
-        merge_gap = AVATAR_SIZE // 2
-        merged = []
-        i = 0
-        while i < len(groups):
-            sy, ey = groups[i]
-            while i + 1 < len(groups) and groups[i + 1][0] - ey < merge_gap:
-                i += 1
-                ey = groups[i][1]
-            merged.append((sy, ey))
-            i += 1
-
-        # 找到每个合并组的 x 范围，计算居中位置
-        positions = []
-        for sy, ey in merged:
-            # 在此 y 范围内找到标记色的 x 范围
-            region = arr[sy:ey + 1, :, :3]
-            col_matches = np.any(
-                np.all(np.abs(region.astype(int) - marker_rgb.astype(int)) < 20, axis=2),
-                axis=0
-            )
-            match_cols = np.where(col_matches)[0]
-            if len(match_cols) == 0:
-                continue
-            cx = match_cols[0]
-            cy = sy
-            positions.append((int(cx), int(cy)))
-
-        return positions
-
-    def _create_avatar_image(self, avatar_info: dict):
-        """创建圆形头像 RGBA 图像（带抗锯齿边缘）"""
-        from PIL import Image, ImageDraw, ImageFont
-
-        size = AVATAR_SIZE
-        # 4x 超采样抗锯齿：在大画布上绘制，缩回原尺寸
-        supersample = 4
-        big_size = size * supersample
-
-        avatar_type = avatar_info.get("type")
-
-        if avatar_type == "image":
-            src = avatar_info.get("src", "")
-            try:
-                img = Image.open(src).convert("RGBA")
-                img = img.resize((big_size, big_size), Image.LANCZOS)
-            except Exception:
-                logger.debug(f"打开头像图片失败: {src}")
-                img = self._create_gradient_avatar(avatar_info.get("initial", "?"), big_size)
-        else:
-            initial = avatar_info.get("initial", "?")
-            img = self._create_gradient_avatar(initial, big_size)
-
-        # 创建高分辨率圆形 mask
-        mask = Image.new("L", (big_size, big_size), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse([0, 0, big_size - 1, big_size - 1], fill=255)
-
-        # 应用 mask
-        output = Image.new("RGBA", (big_size, big_size), (0, 0, 0, 0))
-        output.paste(img, (0, 0), mask)
-
-        # 缩回原尺寸，LANCZOS 插值产生抗锯齿边缘
-        output = output.resize((size, size), Image.LANCZOS)
-        return output
-
-    def _load_font(self, size: int):
-        """加载字体：优先已下载的 HarmonyOS Sans SC，回退系统 CJK 字体"""
-        from PIL import ImageFont
-
-        # 优先使用已下载的 HarmonyOS Sans SC Medium（适中粗细适合头像首字）
-        if hasattr(self, '_fonts_dir'):
-            medium_path = self._fonts_dir / "HarmonyOS_Sans_SC_Medium.ttf"
-            if medium_path.exists():
-                try:
-                    return ImageFont.truetype(str(medium_path), size)
-                except Exception:
-                    pass
-
-        # 回退系统 CJK 字体
-        font_candidates = [
-            # Windows
-            "msyh.ttc",       # 微软雅黑
-            "msyhbd.ttc",     # 微软雅黑粗体
-            "simhei.ttf",     # 黑体
-            # macOS
-            "/System/Library/Fonts/STHeiti Medium.ttc",
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            "/System/Library/Fonts/PingFang.ttc",
-            # Linux
-            "NotoSansCJK-Regular.ttc",
-            "WenQuanYiMicroHei.ttf",
-            "DroidSansFallbackFull.ttf",
-        ]
-        for name in font_candidates:
-            try:
-                return ImageFont.truetype(name, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-
-    def _create_gradient_avatar(self, initial: str, size: int):
-        """创建渐变色头像（带首字），size 可以是超采样尺寸"""
-        from PIL import Image, ImageDraw
-
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-
-        # 绘制渐变背景（简化：用纯色模拟，避免 Pillow gradient 复杂度）
-        # 从 #667eea 到 #764ba2 的渐变
-        for y in range(size):
-            ratio = y / max(size - 1, 1)
-            r = int(102 + (118 - 102) * ratio)
-            g = int(126 + (75 - 126) * ratio)
-            b = int(234 + (162 - 234) * ratio)
-            draw.line([(0, y), (size - 1, y)], fill=(r, g, b, 255))
-
-        # 绘制首字（字号按 size 缩放）
-        font_size = max(int(size * 0.35), 12)
-        font = self._load_font(font_size)
-
-        bbox = draw.textbbox((0, 0), initial, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        tx = (size - tw) // 2
-        ty = (size - th) // 2 - bbox[1]
-        draw.text((tx, ty), initial, fill=(255, 255, 255, 255), font=font)
-
-        return img
-
-    def _build_css(self, font_css: str) -> str:
+    def _build_css(self) -> str:
         return f"""
-        {font_css}
-
         * {{
             margin: 0;
             padding: 0;
@@ -739,10 +584,25 @@ class QuotlyRenderer:
             flex-shrink: 0;
         }}
 
-        .avatar-marker {{
+        .avatar {{
             width: 80px;
             height: 80px;
-            background-color: #FF00FF;
+            border-radius: 50%;
+            object-fit: cover;
+            display: block;
+        }}
+
+        .avatar-placeholder {{
+            background-image: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+
+        .avatar-initial {{
+            color: #ffffff;
+            font-size: 30px;
+            font-weight: 500;
         }}
 
         .content-wrapper {{
@@ -878,7 +738,7 @@ class QuotlyRenderer:
             border-radius: 4px;
         }}"""
 
-    # Unicode 双向控制字符及其他不可见格式字符，会导致 HarfBuzz/Skia 渲染报错
+    # Unicode 双向控制字符及其他不可见格式字符，会导致文本整形渲染异常
     _BIDI_CONTROL_CHARS = str.maketrans('', '', ''.join(chr(c) for c in (
         *range(0x200B, 0x2010),  # ZWSP, ZWNJ, ZWJ, LRM, RLM, NNBSP, ZWNBSP
         *range(0x2028, 0x202F),  # LRE, RLE, PDF, LRO, RLO, NARS, ASS, ISS, AFS
@@ -898,7 +758,7 @@ class QuotlyRenderer:
                 .replace('"', "&quot;")
                 .replace("'", "&#39;"))
 
-    def _parse_content(self, content: str, max_w: int = 600, max_h: int = 800) -> tuple:
+    def _parse_content(self, content: str, images_map: dict, max_w: int = 600, max_h: int = 800) -> str:
         import re
 
         image_pattern = r'\[图片\]\(([^)]+)\)'
@@ -911,11 +771,13 @@ class QuotlyRenderer:
                 parts.append(self._text_to_html(text_part))
 
             image_url = match.group(1)
-            image_src = self._get_local_image_path(image_url)
-            if image_src:
+            image_bytes = self._get_image_bytes(image_url)
+            if image_bytes:
+                mem_key = f"mem://image-{len(images_map)}"
+                images_map[mem_key] = image_bytes
                 size_class = self._image_size_class(image_url, max_w, max_h)
                 img_class = "msg-image" + (f" {size_class}" if size_class else "")
-                parts.append(f'<img class="{img_class}" src="{image_src}">')
+                parts.append(f'<img class="{img_class}" src="{mem_key}">')
             else:
                 parts.append('<span class="image-fallback-inline">[图片]</span>')
             last_end = match.end()
@@ -923,7 +785,7 @@ class QuotlyRenderer:
         if last_end < len(content):
             parts.append(self._text_to_html(content[last_end:]))
 
-        return "".join(parts) if parts else self._text_to_html(content), None
+        return "".join(parts) if parts else self._text_to_html(content)
 
     def _text_to_html(self, text: str) -> str:
         escaped = self._escape_html(text)

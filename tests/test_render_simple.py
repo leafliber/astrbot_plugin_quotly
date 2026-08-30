@@ -1,5 +1,5 @@
 """
-简单渲染测试 - html2pic 版本
+简单渲染测试 - pytakumi 版本
 """
 
 import asyncio
@@ -131,7 +131,7 @@ async def test_actual_render():
 
     print()
     print("=" * 60)
-    print("实际渲染测试 (html2pic)")
+    print("实际渲染测试 (pytakumi)")
     print("=" * 60)
 
     messages = [

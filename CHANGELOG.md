@@ -5,6 +5,27 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 并且本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-08-30
+
+### 💥 重大变更
+
+- **渲染引擎替换**：移除 html2pic（pictex + skia-python），改用 [pytakumi](https://github.com/KimigaiiWuyi/pytakumi)（Rust 布局引擎 [Takumi](https://takumi.kane.tw/) 的 Python 绑定）
+  - 零运行时依赖、全平台预编译 wheel（含 Linux ARM64 / musl），彻底移除 fontconfig / OpenGL 等系统依赖要求
+  - 圆形头像由引擎原生 `border-radius: 50%` + `object-fit: cover` 裁剪，删除品红占位符 + numpy 像素扫描 + Pillow 后处理方案（渲染器代码量减少约 1/3）
+  - 卡片宽度两遍渲染：`measure` 测固有宽度后按内容出图，保持旧版"卡片贴合内容"效果
+
+### 移除
+
+- ❌ `html2pic` 及传递依赖（pictex、skia-python、beautifulsoup4、tinycss2）
+- ❌ `numpy` 直接依赖（品红标记扫描已随新头像方案移除）
+- ❌ NotoColorEmoji 导致旧引擎渲染崩溃的隐患（新引擎原生支持注册 CBDT 彩色 emoji 字体）
+
+### 新增
+
+- ✅ data URL 形式的头像 / 图片消息支持（解码为字节后交给引擎渲染）
+
+---
+
 ## [1.1.0] - 2026-06-06
 
 ### 💥 重大变更
